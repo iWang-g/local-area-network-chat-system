@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="400" viewBox="0 0 760 400">
+  <rect width="100%" height="100%" fill="#ffffff"/>
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#000"/>
+    </marker>
+  </defs>
+  <circle cx="78" cy="88" r="14" fill="none" stroke="#000" stroke-width="1.4"/>
+  <line x1="78" y1="102" x2="78" y2="158" stroke="#000" stroke-width="1.4"/>
+  <line x1="78" y1="118" x2="48" y2="148" stroke="#000" stroke-width="1.4"/>
+  <line x1="78" y1="118" x2="108" y2="148" stroke="#000" stroke-width="1.4"/>
+  <line x1="78" y1="158" x2="52" y2="202" stroke="#000" stroke-width="1.4"/>
+  <line x1="78" y1="158" x2="104" y2="202" stroke="#000" stroke-width="1.4"/>
+  <text x="78" y="228" text-anchor="middle" font-size="14" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x666E;&#x901A;&#x7528;&#x6237;</text>
+  <rect x="228" y="32" width="510" height="336" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="483" y="56" text-anchor="middle" font-size="15" font-weight="bold" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x7528;&#x6237;&#x7BA1;&#x7406;&#x6A21;&#x5757;</text>
+  <ellipse cx="420" cy="95" rx="92" ry="30" fill="#fff" stroke="#000" stroke-width="1.2"/>
+  <text x="420" y="100" text-anchor="middle" font-size="13" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x6CE8;&#x518C;</text>
+  <ellipse cx="420" cy="165" rx="92" ry="30" fill="#fff" stroke="#000" stroke-width="1.2"/>
+  <text x="420" y="170" text-anchor="middle" font-size="13" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x767B;&#x5F55;</text>
+  <ellipse cx="420" cy="235" rx="110" ry="30" fill="#fff" stroke="#000" stroke-width="1.2"/>
+  <text x="420" y="240" text-anchor="middle" font-size="13" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x4E2A;&#x4EBA;&#x4FE1;&#x606F;&#x7BA1;&#x7406;</text>
+  <ellipse cx="420" cy="305" rx="110" ry="30" fill="#fff" stroke="#000" stroke-width="1.2"/>
+  <text x="420" y="310" text-anchor="middle" font-size="13" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x5728;&#x7EBF;&#x72B6;&#x6001;&#x67E5;&#x770B;</text>
+  <line x1="118" y1="120" x2="318" y2="95" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <text x="200" y="88" font-size="11" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x7533;&#x8BF7;&#x6CE8;&#x518C;</text>
+  <line x1="118" y1="135" x2="318" y2="165" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <text x="195" y="158" font-size="11" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x767B;&#x5F55;&#x7CFB;&#x7EDF;</text>
+  <line x1="118" y1="150" x2="308" y2="235" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <text x="175" y="210" font-size="11" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x7EF4;&#x62A4;&#x8D44;&#x6599;</text>
+  <line x1="118" y1="165" x2="308" y2="305" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <text x="175" y="255" font-size="11" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x67E5;&#x770B;&#x72B6;&#x6001;</text>
+</svg>

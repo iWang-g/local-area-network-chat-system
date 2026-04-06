@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="700" viewBox="0 0 640 700">
+  <rect width="100%" height="100%" fill="#ffffff"/>
+  <defs>
+    <marker id="mf" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#000"/>
+    </marker>
+  </defs>
+  <g stroke="#000" stroke-width="1.1" fill="none" marker-end="url(#mf)">
+    <line x1="320" y1="58" x2="320" y2="78"/>
+    <line x1="320" y1="104" x2="320" y2="118"/>
+    <line x1="285" y1="151" x2="120" y2="151"/>
+    <line x1="120" y1="151" x2="120" y2="168"/>
+    <polyline points="355,151 380,151 380,208 320,208"/>
+    <line x1="320" y1="234" x2="320" y2="248"/>
+    <line x1="320" y1="274" x2="320" y2="288"/>
+    <line x1="320" y1="314" x2="320" y2="328"/>
+    <line x1="285" y1="361" x2="180" y2="361"/>
+    <line x1="180" y1="361" x2="180" y2="378"/>
+    <line x1="355" y1="361" x2="460" y2="361"/>
+    <line x1="460" y1="361" x2="460" y2="378"/>
+    <line x1="180" y1="404" x2="180" y2="640"/>
+    <line x1="180" y1="640" x2="308" y2="640"/>
+    <line x1="460" y1="404" x2="460" y2="430"/>
+    <polyline points="460,430 460,451 320,451 320,468"/>
+    <line x1="320" y1="494" x2="320" y2="518"/>
+    <line x1="320" y1="544" x2="320" y2="636"/>
+  </g>
+  <ellipse cx="320" cy="46" rx="44" ry="16" fill="#fff" stroke="#000" stroke-width="1.3"/>
+  <text x="320" y="50" text-anchor="middle" font-size="11" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x5F00;&#x59CB;</text>
+  <rect x="210" y="78" width="220" height="26" fill="#fff" stroke="#000"/>
+  <text x="320" y="95" text-anchor="middle" font-size="10.5" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x641C;&#x7D22;&#x76EE;&#x6807;&#x7528;&#x6237;</text>
+  <polygon points="320,118 360,151 320,184 280,151" fill="#fff" stroke="#000" stroke-width="1.1"/>
+  <text x="320" y="154" text-anchor="middle" font-size="9.5" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x7528;&#x6237;&#x5B58;&#x5728;&#x4E14;&#x53EF;&#x6DFB;&#x52A0;</text>
+  <rect x="50" y="168" width="140" height="26" fill="#fff" stroke="#000"/>
+  <text x="120" y="185" text-anchor="middle" font-size="10" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x8FD4;&#x56DE;&#x9519;&#x8BEF;&#x63D0;&#x793A;</text>
+  <rect x="225" y="208" width="190" height="26" fill="#fff" stroke="#000"/>
+  <text x="320" y="225" text-anchor="middle" font-size="10.5" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x63D0;&#x4EA4;&#x597D;&#x53CB;&#x7533;&#x8BF7;</text>
+  <rect x="225" y="248" width="190" height="26" fill="#fff" stroke="#000"/>
+  <text x="320" y="265" text-anchor="middle" font-size="10" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x5199;&#x5165;&#x7533;&#x8BF7;&#x8868;</text>
+  <rect x="215" y="288" width="210" height="26" fill="#fff" stroke="#000"/>
+  <text x="320" y="305" text-anchor="middle" font-size="10" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x901A;&#x77E5;&#x5BF9;&#x65B9;&#xFF08;&#x5728;&#x7EBF;&#xFF09;</text>
+  <polygon points="320,328 360,361 320,394 280,361" fill="#fff" stroke="#000" stroke-width="1.1"/>
+  <text x="320" y="364" text-anchor="middle" font-size="10" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x662F;&#x5426;&#x540C;&#x610F;</text>
+  <rect x="110" y="378" width="140" height="26" fill="#fff" stroke="#000"/>
+  <text x="180" y="395" text-anchor="middle" font-size="10" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x66F4;&#x65B0;&#x7533;&#x8BF7;&#x72B6;&#x6001;</text>
+  <rect x="365" y="378" width="190" height="26" fill="#fff" stroke="#000"/>
+  <text x="460" y="395" text-anchor="middle" font-size="10" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x5199;&#x5165;&#x597D;&#x53CB;&#x5173;&#x7CFB;</text>
+  <rect x="225" y="468" width="190" height="26" fill="#fff" stroke="#000"/>
+  <text x="320" y="485" text-anchor="middle" font-size="10" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x53CC;&#x65B9;&#x5237;&#x65B0;&#x5217;&#x8868;</text>
+  <rect x="185" y="518" width="270" height="26" fill="#fff" stroke="#000"/>
+  <text x="320" y="535" text-anchor="middle" font-size="10" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x5220;&#x9664;&#x597D;&#x53CB;&#xFF1A;&#x53D1;&#x8D77;&#x2192;&#x5220;&#x9664;&#x5173;&#x7CFB;&#x2192;&#x901A;&#x77E5;&#x53E6;&#x4E00;&#x65B9;</text>
+  <ellipse cx="320" cy="652" rx="44" ry="16" fill="#fff" stroke="#000" stroke-width="1.3"/>
+  <text x="320" y="656" text-anchor="middle" font-size="11" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x7ED3;&#x675F;</text>
+  <text x="250" y="142" font-size="9" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x5426;</text>
+  <text x="370" y="142" font-size="9" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x662F;</text>
+  <text x="265" y="352" font-size="9" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x5426;</text>
+  <text x="385" y="352" font-size="9" fill="#000" font-family="Microsoft YaHei, SimHei, sans-serif">&#x662F;</text>
+  <line x1="120" y1="194" x2="120" y2="640" stroke="#000" stroke-width="1.1" marker-end="url(#mf)" fill="none"/>
+</svg>
