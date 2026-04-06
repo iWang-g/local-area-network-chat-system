@@ -1,0 +1,103 @@
+# This file is used to ignore files which are generated
+# ----------------------------------------------------------------------------
+
+*~
+*.autosave
+*.a
+*.core
+*.moc
+*.o
+*.obj
+*.orig
+*.rej
+*.so
+*.so.*
+*_pch.h.cpp
+*_resource.rc
+*.qm
+.#*
+*.*#
+core
+!core/
+tags
+.DS_Store
+.directory
+*.debug
+Makefile*
+*.prl
+*.app
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+Thumbs.db
+*.res
+*.rc
+/.qmake.cache
+/.qmake.stash
+
+# qtcreator generated files
+*.pro.user*
+*.qbs.user*
+CMakeLists.txt.user*
+
+# xemacs temporary files
+*.flc
+
+# Vim temporary files
+.*.swp
+
+# Visual Studio generated files
+*.ib_pdb_index
+*.idb
+*.ilk
+*.pdb
+*.sln
+*.suo
+*.vcproj
+*vcproj.*.*.user
+*.ncb
+*.sdf
+*.opensdf
+*.vcxproj
+*vcxproj.*
+# 保留 vs-server 内的手建工程（上面通配符会误忽略）
+!vs-server/*.sln
+!vs-server/*.vcxproj
+!vs-server/*.vcxproj.filters
+
+# vs-server 本地构建与 IDE 缓存
+vs-server/.vs/
+vs-server/x64/
+vs-server/vs-server/x64/
+vs-server/**/[Dd]ebug/
+vs-server/**/[Rr]elease/
+
+# MinGW generated files
+*.Debug
+*.Release
+
+# Python byte code
+*.pyc
+
+# Binaries
+# --------
+*.dll
+!vs-server/third_party/sqlite/sqlite3.dll
+# 工程以官方 DLL 加载 SQLite，amalgamation 源码体积大且可再下载，不纳入版本库
+vs-server/third_party/sqlite/sqlite3.c
+vs-server/third_party/sqlite/sqlite-dll-win-x64-*.zip
+*.exe
+
+# Directories with generated files
+.moc/
+.obj/
+.pch/
+.rcc/
+.uic/
+/build*/
+
+# 运行日志（qt-client / vs-server 写入 logs/）
+logs/
+
+# 本地备份目录（若存在）
+/back/
