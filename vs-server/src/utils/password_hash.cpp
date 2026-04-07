@@ -8,6 +8,7 @@
 #include <Windows.h>
 #include <bcrypt.h>
 
+#include <cstdio>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -61,6 +62,20 @@ bool verifyPassword(const std::string &saltHex, const std::string &passwordPlain
 std::string randomTokenHex(std::size_t numRandomBytes)
 {
     return randomSaltHex(numRandomBytes);
+}
+
+std::string randomSixDigitCode()
+{
+    unsigned char b[4]{};
+    const NTSTATUS st = ::BCryptGenRandom(nullptr, b, sizeof(b), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    if (!BCRYPT_SUCCESS(st)) {
+        throw std::runtime_error("BCryptGenRandom failed");
+    }
+    const unsigned v = (static_cast<unsigned>(b[0]) << 16) | (static_cast<unsigned>(b[1]) << 8) | b[2];
+    const unsigned n = v % 1000000U;
+    char buf[8]{};
+    std::snprintf(buf, sizeof(buf), "%06u", n);
+    return std::string(buf);
 }
 
 } // namespace vsserver

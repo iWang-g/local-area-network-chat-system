@@ -1,5 +1,6 @@
 #include "vsserver/database.hpp"
 #include "vsserver/logger.hpp"
+#include "vsserver/mail_helper_http.hpp"
 #include "vsserver/protocol.hpp"
 #include "vsserver/tcp_server.hpp"
 
@@ -15,6 +16,12 @@ int main(int argc, char *argv[])
         VSLOG_ERROR("数据库初始化失败: " + dbErr);
     } else {
         VSLOG_INFO("数据库已就绪 (data/chat.db)");
+    }
+
+    if (vsserver::mailHelperConfigured()) {
+        VSLOG_INFO("LANCS_MAIL_HELPER_URL 已设置：注册验证码将经 mail-helper 发送（失败则返回 2008）");
+    } else {
+        VSLOG_INFO("LANCS_MAIL_HELPER_URL 未设置：验证码仅写入本机日志（离线演示）");
     }
 
     std::uint16_t port = vsserver::kDefaultTcpPort;

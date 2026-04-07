@@ -115,6 +115,46 @@ void handleClient(SOCKET client, std::atomic<std::uint64_t> &connId)
                         goto end;
                     }
                 }
+            } else if (*t == "req_email_code") {
+                if (!helloOk) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrNeedHandshake, "请先完成握手")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                if (!AppDatabase::isReady()) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrDbUnavailable, "数据库不可用")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                const auto email = parseJsonStringField(json, "email");
+                if (!email) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrInvalidInput, "缺少 email")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                const auto purposeOpt = parseJsonStringField(json, "purpose");
+                const std::string purpose = purposeOpt.value_or("register");
+                if (purpose != "register") {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrInvalidInput, "不支持的 purpose")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                const EmailCodeIssueResult er = AppDatabase::issueRegisterEmailCode(*email);
+                if (!er.ok) {
+                    const int ra = er.retryAfterSec > 0 ? er.retryAfterSec : -1;
+                    if (!sendAll(client, encodeFrame(buildErrorJson(er.errCode, er.message, ra)))) {
+                        goto end;
+                    }
+                } else {
+                    VSLOG_INFO("[conn " + std::to_string(id) + "] req_email_code ok");
+                    if (!sendAll(client, encodeFrame(buildEmailCodeOkJson()))) {
+                        goto end;
+                    }
+                }
             } else if (*t == "auth_register") {
                 if (!helloOk) {
                     if (!sendAll(client, encodeFrame(buildErrorJson(kErrNeedHandshake, "请先完成握手")))) {
@@ -131,14 +171,21 @@ void handleClient(SOCKET client, std::atomic<std::uint64_t> &connId)
                 const auto email = parseJsonStringField(json, "email");
                 const auto password = parseJsonStringField(json, "password");
                 const auto nickname = parseJsonStringField(json, "nickname");
+                const auto emailCode = parseJsonStringField(json, "email_code");
                 if (!email || !password) {
                     if (!sendAll(client, encodeFrame(buildErrorJson(kErrInvalidInput, "缺少 email 或 password")))) {
                         goto end;
                     }
                     continue;
                 }
+                if (!emailCode) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrInvalidInput, "缺少 email_code")))) {
+                        goto end;
+                    }
+                    continue;
+                }
                 const AuthResult r =
-                    AppDatabase::registerUser(*email, *password, nickname.value_or(std::string()));
+                    AppDatabase::registerUser(*email, *password, nickname.value_or(std::string()), *emailCode);
                 if (!r.ok) {
                     if (!sendAll(client, encodeFrame(buildErrorJson(static_cast<int>(r.code), r.message)))) {
                         goto end;

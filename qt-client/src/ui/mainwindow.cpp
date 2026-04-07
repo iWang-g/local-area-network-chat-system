@@ -40,6 +40,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_register = new RegisterWidget(m_stack);
     connect(m_register, &RegisterWidget::registerSubmitted, this, &MainWindow::onRegisterSubmitted);
+    connect(m_register, &RegisterWidget::requestEmailCode, this, &MainWindow::onRegisterRequestEmailCode);
     connect(m_register, &RegisterWidget::backToLoginRequested, this, &MainWindow::onRegisterBackToLogin);
     m_stack->addWidget(m_register);
 
@@ -104,11 +105,13 @@ void MainWindow::showLoginPage()
         m_tcpDebug->hide();
     }
     m_authPhase = 0;
+    m_pendingEmailCodeOnly = false;
     m_client->disconnectFromServer();
     m_stack->setCurrentWidget(m_login);
     m_login->clearError();
     if (m_register) {
         m_register->clearError();
+        m_register->clearCodeSentHint();
     }
     menuBar()->clear();
     menuBar()->hide();
@@ -193,7 +196,8 @@ void MainWindow::onRegisterRequested()
     resize(480, 620);
 }
 
-void MainWindow::onRegisterSubmitted(const QString &email, const QString &password, const QString &nickname)
+void MainWindow::onRegisterSubmitted(const QString &email, const QString &password, const QString &nickname,
+                                     const QString &emailCode)
 {
     m_register->clearError();
     QString host = m_register->serverHost();
@@ -205,7 +209,25 @@ void MainWindow::onRegisterSubmitted(const QString &email, const QString &passwo
     m_pendingEmail = email;
     m_pendingPassword = password;
     m_pendingNickname = nickname;
+    m_pendingEmailCode = emailCode;
+    m_pendingEmailCodeOnly = false;
     m_pendingRegister = true;
+    m_authPhase = 1;
+    m_client->connectToServer(host, m_lastAuthPort);
+}
+
+void MainWindow::onRegisterRequestEmailCode(const QString &email)
+{
+    m_register->clearError();
+    QString host = m_register->serverHost();
+    if (host.isEmpty()) {
+        host = QStringLiteral("127.0.0.1");
+    }
+    m_lastAuthHost = host;
+    m_lastAuthPort = m_register->serverPort();
+    m_pendingEmailForCode = email;
+    m_pendingEmailCodeOnly = true;
+    m_pendingRegister = false;
     m_authPhase = 1;
     m_client->connectToServer(host, m_lastAuthPort);
 }
@@ -216,6 +238,7 @@ void MainWindow::onRegisterBackToLogin()
         m_client->disconnectFromServer();
         m_authPhase = 0;
         m_pendingRegister = false;
+        m_pendingEmailCodeOnly = false;
     }
     if (m_register && m_login) {
         m_register->clearError();
@@ -252,11 +275,18 @@ void MainWindow::onTcpJsonReceived(const QJsonObject &obj)
             return;
         }
         m_authPhase = 2;
-        if (m_pendingRegister) {
+        if (m_pendingEmailCodeOnly) {
+            QJsonObject req;
+            req.insert(QStringLiteral("type"), QStringLiteral("req_email_code"));
+            req.insert(QStringLiteral("email"), m_pendingEmailForCode);
+            req.insert(QStringLiteral("purpose"), QStringLiteral("register"));
+            m_client->sendJsonObject(req);
+        } else if (m_pendingRegister) {
             QJsonObject reg;
             reg.insert(QStringLiteral("type"), QStringLiteral("auth_register"));
             reg.insert(QStringLiteral("email"), m_pendingEmail);
             reg.insert(QStringLiteral("password"), m_pendingPassword);
+            reg.insert(QStringLiteral("email_code"), m_pendingEmailCode);
             if (!m_pendingNickname.isEmpty()) {
                 reg.insert(QStringLiteral("nickname"), m_pendingNickname);
             }
@@ -268,6 +298,17 @@ void MainWindow::onTcpJsonReceived(const QJsonObject &obj)
             login.insert(QStringLiteral("password"), m_pendingPassword);
             m_client->sendJsonObject(login);
         }
+        return;
+    }
+    if (t == QStringLiteral("email_code_ok")) {
+        if (m_authPhase != 2 || !m_pendingEmailCodeOnly) {
+            return;
+        }
+        m_authPhase = 0;
+        m_pendingEmailCodeOnly = false;
+        m_client->disconnectFromServer();
+        m_register->showCodeSentHint();
+        m_register->startResendCooldown(60);
         return;
     }
     if (t == QStringLiteral("auth_ok")) {
@@ -282,12 +323,21 @@ void MainWindow::onTcpJsonReceived(const QJsonObject &obj)
         if (m_authPhase == 0) {
             return;
         }
+        const bool codeOnly = m_pendingEmailCodeOnly;
         const bool fromRegister = m_pendingRegister;
         m_authPhase = 0;
         m_pendingRegister = false;
+        m_pendingEmailCodeOnly = false;
         const QString msg = obj.value(QStringLiteral("message")).toString();
+        const int retryAfter = obj.value(QStringLiteral("retry_after_sec")).toInt(0);
         m_client->disconnectFromServer();
-        if (fromRegister && m_register) {
+        if (codeOnly && m_register) {
+            m_register->showError(msg);
+            if (retryAfter > 0) {
+                m_register->startResendCooldown(retryAfter);
+            }
+            m_stack->setCurrentWidget(m_register);
+        } else if (fromRegister && m_register) {
             m_register->showError(msg);
             m_stack->setCurrentWidget(m_register);
         } else {
@@ -300,10 +350,15 @@ void MainWindow::onTcpJsonReceived(const QJsonObject &obj)
 void MainWindow::onTcpProtocolError(const QString &message)
 {
     if (m_authPhase != 0) {
+        const bool codeOnly = m_pendingEmailCodeOnly;
         const bool fromRegister = m_pendingRegister;
         m_authPhase = 0;
         m_pendingRegister = false;
-        if (fromRegister && m_register) {
+        m_pendingEmailCodeOnly = false;
+        if (codeOnly && m_register) {
+            m_register->showError(message);
+            m_stack->setCurrentWidget(m_register);
+        } else if (fromRegister && m_register) {
             m_register->showError(message);
             m_stack->setCurrentWidget(m_register);
         } else {

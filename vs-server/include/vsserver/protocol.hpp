@@ -18,5 +18,9 @@ inline constexpr int kErrEmailTaken = 2002;
 inline constexpr int kErrInvalidCredentials = 2003;
 inline constexpr int kErrUserNotFound = 2004;
 inline constexpr int kErrInvalidInput = 2005;
+inline constexpr int kErrInvalidEmailCode = 2006;
+inline constexpr int kErrEmailCodeRateLimited = 2007;
+/// 已配置 `LANCS_MAIL_HELPER_URL` 但 HTTP 通知或 SMTP 侧失败（验证码未下发给用户）。
+inline constexpr int kErrEmailSendFailed = 2008;
 
 } // namespace vsserver

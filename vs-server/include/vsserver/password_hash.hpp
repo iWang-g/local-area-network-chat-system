@@ -13,4 +13,7 @@ bool verifyPassword(const std::string &saltHex, const std::string &passwordPlain
 /// 会话 token：随机字节转 hex（与 salt 生成同源）。
 std::string randomTokenHex(std::size_t numRandomBytes = 32);
 
+/// 6 位数字验证码（前导零），用于邮箱注册等。
+std::string randomSixDigitCode();
+
 } // namespace vsserver

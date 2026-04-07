@@ -83,7 +83,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -103,7 +103,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -119,7 +119,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>if exist "$(ProjectDir)third_party\sqlite\sqlite3.dll" copy /Y "$(ProjectDir)third_party\sqlite\sqlite3.dll" "$(OutDir)"</Command>
@@ -142,7 +142,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>if exist "$(ProjectDir)third_party\sqlite\sqlite3.dll" copy /Y "$(ProjectDir)third_party\sqlite\sqlite3.dll" "$(OutDir)"</Command>
@@ -153,6 +153,7 @@
     <ClCompile Include="src\db\database.cpp" />
     <ClCompile Include="src\db\sqlite_dynamic.cpp" />
     <ClCompile Include="src\net\message_parse.cpp" />
+    <ClCompile Include="src\net\mail_helper_http.cpp" />
     <ClCompile Include="src\net\tcp_server.cpp" />
     <ClCompile Include="src\net\wire.cpp" />
     <ClCompile Include="src\utils\logger.cpp" />
@@ -160,6 +161,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\vsserver\database.hpp" />
+    <ClInclude Include="include\vsserver\mail_helper_http.hpp" />
     <ClInclude Include="include\vsserver\logger.hpp" />
     <ClInclude Include="include\vsserver\message_parse.hpp" />
     <ClInclude Include="include\vsserver\password_hash.hpp" />

@@ -30,6 +30,9 @@
     <ClCompile Include="src\net\message_parse.cpp">
       <Filter>src\net</Filter>
     </ClCompile>
+    <ClCompile Include="src\net\mail_helper_http.cpp">
+      <Filter>src\net</Filter>
+    </ClCompile>
     <ClCompile Include="src\net\tcp_server.cpp">
       <Filter>src\net</Filter>
     </ClCompile>
@@ -50,6 +53,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\vsserver\mail_helper_http.hpp">
+      <Filter>include\vsserver</Filter>
+    </ClInclude>
     <ClInclude Include="include\vsserver\logger.hpp">
       <Filter>include\vsserver</Filter>
     </ClInclude>

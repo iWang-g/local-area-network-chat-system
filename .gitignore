@@ -76,6 +76,21 @@ vs-server/**/[Rr]elease/
 *.Debug
 *.Release
 
+# Node (mail-helper)
+mail-helper/node_modules/
+# 密钥与本地配置（示例文件 .env.example 仍纳入版本库）
+mail-helper/.env
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# SQLite 运行时库（相对各可执行文件目录下的 data/，避免误提交）
+**/data/*.db
+**/data/*.db-journal
+**/data/*.db-wal
+**/data/*.db-shm
+
 # Python byte code
 *.pyc
 

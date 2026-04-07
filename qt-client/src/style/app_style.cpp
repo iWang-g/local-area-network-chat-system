@@ -74,6 +74,22 @@ QString loginWidgetStyle()
             color: #0ea8e0;
             text-decoration: underline;
         }
+        #loginSecondaryButton {
+            color: #12b7f5;
+            border: 1px solid #12b7f5;
+            border-radius: 6px;
+            background: #ffffff;
+            font-size: 13px;
+            padding: 4px 8px;
+        }
+        #loginSecondaryButton:hover {
+            background: #e6f7ff;
+        }
+        #loginSecondaryButton:disabled {
+            color: #bfbfbf;
+            border-color: #d9d9d9;
+            background: #f5f5f5;
+        }
         QCheckBox#loginRemember {
             font-size: 12px;
             color: #595959;

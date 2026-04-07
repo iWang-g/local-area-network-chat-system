@@ -62,16 +62,26 @@ std::string jsonEscapeString(std::string_view utf8)
     return oss.str();
 }
 
-std::string buildErrorJson(int code, const std::string &messageUtf8)
+std::string buildErrorJson(int code, const std::string &messageUtf8, int retryAfterSec)
 {
-    return std::string(R"({"type":"error","code":)") + std::to_string(code) + R"(,"message":")"
-           + jsonEscapeString(messageUtf8) + "\"}";
+    std::string out = std::string(R"({"type":"error","code":)") + std::to_string(code) + R"(,"message":")"
+                        + jsonEscapeString(messageUtf8) + "\"";
+    if (retryAfterSec >= 0) {
+        out += R"(,"retry_after_sec":)" + std::to_string(retryAfterSec);
+    }
+    out += '}';
+    return out;
 }
 
 std::string buildAuthOkJson(std::int64_t userId, const std::string &tokenHex, const std::string &emailUtf8)
 {
     return std::string(R"({"type":"auth_ok","user_id":)") + std::to_string(userId) + R"(,"token":")"
            + jsonEscapeString(tokenHex) + R"(","email":")" + jsonEscapeString(emailUtf8) + "\"}";
+}
+
+std::string buildEmailCodeOkJson()
+{
+    return R"({"type":"email_code_ok"})";
 }
 
 bool validateHello(const std::string &jsonUtf8, std::string &err)

@@ -9,12 +9,16 @@
 #include <QPushButton>
 #include <QIntValidator>
 #include <QSettings>
+#include <QTimer>
 #include <QVBoxLayout>
 
 RegisterWidget::RegisterWidget(QWidget *parent)
     : QWidget(parent)
+    , m_cooldownTimer(new QTimer(this))
 {
     setObjectName(QStringLiteral("LanRegisterWidget"));
+    m_cooldownTimer->setInterval(1000);
+    connect(m_cooldownTimer, &QTimer::timeout, this, &RegisterWidget::onCooldownTick);
     buildUi();
     {
         QSettings s;
@@ -39,7 +43,7 @@ void RegisterWidget::buildUi()
     auto *card = new QFrame(this);
     card->setObjectName(QStringLiteral("loginCard"));
     card->setFixedWidth(380);
-    card->setMinimumHeight(520);
+    card->setMinimumHeight(560);
 
     auto *cardLay = new QVBoxLayout(card);
     cardLay->setContentsMargins(36, 32, 36, 32);
@@ -94,6 +98,28 @@ void RegisterWidget::buildUi()
     m_email->setClearButtonEnabled(true);
     cardLay->addWidget(m_email);
 
+    auto *codeRow = new QHBoxLayout();
+    m_emailCode = new QLineEdit(card);
+    m_emailCode->setObjectName(QStringLiteral("loginInput"));
+    m_emailCode->setPlaceholderText(QStringLiteral("邮箱验证码"));
+    m_emailCode->setClearButtonEnabled(true);
+    codeRow->addWidget(m_emailCode, 1);
+    m_sendCodeBtn = new QPushButton(QStringLiteral("获取验证码"), card);
+    m_sendCodeBtn->setObjectName(QStringLiteral("loginSecondaryButton"));
+    m_sendCodeBtn->setCursor(Qt::PointingHandCursor);
+    m_sendCodeBtn->setMinimumHeight(38);
+    m_sendCodeBtn->setFixedWidth(112);
+    codeRow->addWidget(m_sendCodeBtn);
+    cardLay->addLayout(codeRow);
+
+    m_codeHintLabel = new QLabel(card);
+    m_codeHintLabel->setObjectName(QStringLiteral("loginSubtitle"));
+    m_codeHintLabel->setWordWrap(true);
+    m_codeHintLabel->setAlignment(Qt::AlignCenter);
+    m_codeHintLabel->setVisible(false);
+    m_codeHintLabel->setStyleSheet(QStringLiteral("color: #52c41a; font-size: 12px;"));
+    cardLay->addWidget(m_codeHintLabel);
+
     m_password = new QLineEdit(card);
     m_password->setObjectName(QStringLiteral("loginInput"));
     m_password->setPlaceholderText(QStringLiteral("密码"));
@@ -130,6 +156,7 @@ void RegisterWidget::buildUi()
 
     connect(regBtn, &QPushButton::clicked, this, &RegisterWidget::onSubmitClicked);
     connect(backBtn, &QPushButton::clicked, this, &RegisterWidget::onBackClicked);
+    connect(m_sendCodeBtn, &QPushButton::clicked, this, &RegisterWidget::onSendCodeClicked);
     connect(m_email, &QLineEdit::returnPressed, this, &RegisterWidget::onSubmitClicked);
     connect(m_password, &QLineEdit::returnPressed, this, &RegisterWidget::onSubmitClicked);
     connect(m_password2, &QLineEdit::returnPressed, this, &RegisterWidget::onSubmitClicked);
@@ -145,9 +172,27 @@ void RegisterWidget::clearError()
 
 void RegisterWidget::showError(const QString &message)
 {
+    clearCodeSentHint();
     if (m_errorLabel) {
         m_errorLabel->setText(message);
         m_errorLabel->setVisible(true);
+    }
+}
+
+void RegisterWidget::showCodeSentHint()
+{
+    if (m_codeHintLabel) {
+        m_codeHintLabel->setText(
+            QStringLiteral("验证码已生成。当前为离线演示：请查看服务端控制台或日志文件中的验证码。"));
+        m_codeHintLabel->setVisible(true);
+    }
+}
+
+void RegisterWidget::clearCodeSentHint()
+{
+    if (m_codeHintLabel) {
+        m_codeHintLabel->clear();
+        m_codeHintLabel->setVisible(false);
     }
 }
 
@@ -179,14 +224,65 @@ quint16 RegisterWidget::serverPort() const
     return static_cast<quint16>(p);
 }
 
+QString RegisterWidget::registerEmailInput() const
+{
+    return m_email ? m_email->text().trimmed() : QString();
+}
+
+void RegisterWidget::startResendCooldown(int seconds)
+{
+    if (!m_sendCodeBtn || !m_cooldownTimer) {
+        return;
+    }
+    m_cooldownLeft = qMax(1, seconds);
+    m_sendCodeBtn->setEnabled(false);
+    m_sendCodeBtn->setText(QStringLiteral("%1s 后重发").arg(m_cooldownLeft));
+    m_cooldownTimer->start();
+}
+
+void RegisterWidget::onCooldownTick()
+{
+    if (!m_sendCodeBtn) {
+        return;
+    }
+    m_cooldownLeft--;
+    if (m_cooldownLeft <= 0) {
+        m_cooldownTimer->stop();
+        m_sendCodeBtn->setEnabled(true);
+        m_sendCodeBtn->setText(QStringLiteral("获取验证码"));
+        return;
+    }
+    m_sendCodeBtn->setText(QStringLiteral("%1s 后重发").arg(m_cooldownLeft));
+}
+
+void RegisterWidget::onSendCodeClicked()
+{
+    clearError();
+    const QString email = registerEmailInput();
+    if (email.isEmpty()) {
+        showError(QStringLiteral("请先填写邮箱"));
+        return;
+    }
+    if (!email.contains(QLatin1Char('@'))) {
+        showError(QStringLiteral("邮箱格式不正确"));
+        return;
+    }
+    emit requestEmailCode(email);
+}
+
 void RegisterWidget::onSubmitClicked()
 {
     clearError();
-    const QString email = m_email->text().trimmed();
+    const QString email = registerEmailInput();
     const QString pwd = m_password->text();
     const QString pwd2 = m_password2->text();
+    const QString code = m_emailCode ? m_emailCode->text().trimmed() : QString();
     if (email.isEmpty()) {
         showError(QStringLiteral("请输入邮箱"));
+        return;
+    }
+    if (code.isEmpty()) {
+        showError(QStringLiteral("请输入邮箱验证码"));
         return;
     }
     if (pwd.isEmpty()) {
@@ -197,7 +293,7 @@ void RegisterWidget::onSubmitClicked()
         showError(QStringLiteral("两次输入的密码不一致"));
         return;
     }
-    emit registerSubmitted(email, pwd, m_nickname ? m_nickname->text().trimmed() : QString());
+    emit registerSubmitted(email, pwd, m_nickname ? m_nickname->text().trimmed() : QString(), code);
 }
 
 void RegisterWidget::onBackClicked()
