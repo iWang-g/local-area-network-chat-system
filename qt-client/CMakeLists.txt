@@ -11,14 +11,19 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(MSVC)
-    add_compile_options(/utf-8 /Zc:__cplusplus /permissive-)
+    # 并行编译（Ninja）时多进程写同一 vc*.pdb，缺 /FS 会触发 C2471「无法更新程序数据库」。
+    add_compile_options(/utf-8 /Zc:__cplusplus /permissive- /FS)
 endif()
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Network)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Network)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Network Svg)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Network Svg)
 
 set(PROJECT_SOURCES
     src/app/main.cpp
+    src/utils/local_profile.cpp
+    src/utils/local_profile.h
+    src/utils/local_stickers.cpp
+    src/utils/local_stickers.h
     src/utils/logger.cpp
     src/utils/logger.h
     src/net/lan_tcp_client.cpp
@@ -27,6 +32,16 @@ set(PROJECT_SOURCES
     src/style/app_style.h
     src/ui/chat_main_widget.cpp
     src/ui/chat_main_widget.h
+    src/ui/sticker_picker_popup.cpp
+    src/ui/sticker_picker_popup.h
+    src/ui/image_preview_dialog.cpp
+    src/ui/image_preview_dialog.h
+    src/ui/add_friend_search_dialog.cpp
+    src/ui/add_friend_search_dialog.h
+    src/ui/chat_history_dialog.cpp
+    src/ui/chat_history_dialog.h
+    src/ui/contacts_widget.cpp
+    src/ui/contacts_widget.h
     src/ui/login_widget.cpp
     src/ui/login_widget.h
     src/ui/register_widget.cpp
@@ -34,8 +49,11 @@ set(PROJECT_SOURCES
     src/ui/mainwindow.cpp
     src/ui/mainwindow.h
     src/ui/mainwindow.ui
+    resources.qrc
     src/ui/network_debug_dialog.cpp
     src/ui/network_debug_dialog.h
+    src/ui/profile_dialog.cpp
+    src/ui/profile_dialog.h
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -66,6 +84,7 @@ target_compile_definitions(qt-client PRIVATE
 target_link_libraries(qt-client PRIVATE
     Qt${QT_VERSION_MAJOR}::Widgets
     Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Svg
 )
 
 if(${QT_VERSION} VERSION_LESS 6.1.0)

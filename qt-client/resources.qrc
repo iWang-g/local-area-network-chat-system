@@ -1,0 +1,20 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <qresource prefix="/icons">
+    <file alias="tool_icon.svg">resources/tool_icon.svg</file>
+    <file alias="login_out_icon.svg">resources/login_out_icon.svg</file>
+    <file alias="personal_information_icon.svg">resources/personal_information_icon.svg</file>
+    <file alias="search_icon.svg">resources/search_icon.svg</file>
+    <file alias="add_icon.svg">resources/add_icon.svg</file>
+    <file alias="add_friend_icon.svg">resources/add_friend_icon.svg</file>
+    <file alias="message_icon.svg">resources/message_icon.svg</file>
+    <file alias="contact_icon.svg">resources/contact_icon.svg</file>
+    <file alias="expression_icon.svg">resources/expression_icon.svg</file>
+    <file alias="file_icon.svg">resources/file_icon.svg</file>
+    <file alias="picture_icon.svg">resources/picture_icon.svg</file>
+    <file alias="history.svg">resources/history.svg</file>
+    <file alias="online_dot_icon.svg">resources/online_dot_icon.svg</file>
+    <file alias="offline_dot_icon.svg">resources/offline_dot_icon.svg</file>
+    <file alias="contact_mode_placeholder_icon.svg">resources/contact_mode_placeholder_icon.svg</file>
+  </qresource>
+</RCC>

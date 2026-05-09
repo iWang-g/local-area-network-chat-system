@@ -83,11 +83,16 @@ bool SqliteDynamic::loadDll()
     LOAD_SYM("sqlite3_reset", p_reset, int (*)(sqlite3_stmt *));
     LOAD_SYM("sqlite3_bind_text", p_bind_text,
              int (*)(sqlite3_stmt *, int, const char *, int, void (*)(void *)));
+    LOAD_SYM("sqlite3_bind_blob", p_bind_blob,
+             int (*)(sqlite3_stmt *, int, const void *, int, void (*)(void *)));
     LOAD_SYM("sqlite3_column_text", p_column_text, const unsigned char *(*)(sqlite3_stmt *, int));
     LOAD_SYM("sqlite3_column_int64", p_column_int64, long long (*)(sqlite3_stmt *, int));
+    LOAD_SYM("sqlite3_column_blob", p_column_blob, const void *(*)(sqlite3_stmt *, int));
+    LOAD_SYM("sqlite3_column_bytes", p_column_bytes, int (*)(sqlite3_stmt *, int));
     LOAD_SYM("sqlite3_free", p_free, void (*)(void *));
     LOAD_SYM("sqlite3_errmsg", p_errmsg, const char *(*)(sqlite3 *));
     LOAD_SYM("sqlite3_last_insert_rowid", p_last_insert_rowid, long long (*)(sqlite3 *));
+    LOAD_SYM("sqlite3_changes", p_changes, int (*)(sqlite3 *));
 
 #undef LOAD_SYM
 
@@ -110,11 +115,15 @@ void SqliteDynamic::unload()
     p_finalize = nullptr;
     p_reset = nullptr;
     p_bind_text = nullptr;
+    p_bind_blob = nullptr;
     p_column_text = nullptr;
     p_column_int64 = nullptr;
+    p_column_blob = nullptr;
+    p_column_bytes = nullptr;
     p_free = nullptr;
     p_errmsg = nullptr;
     p_last_insert_rowid = nullptr;
+    p_changes = nullptr;
 }
 
 int SqliteDynamic::open(const char *path, sqlite3 **db)
@@ -169,6 +178,12 @@ int SqliteDynamic::bind_text_transient(sqlite3_stmt *stmt, int idx, const char *
     return p_bind_text(stmt, idx, val, n, reinterpret_cast<Dtor>(static_cast<std::uintptr_t>(-1)));
 }
 
+int SqliteDynamic::bind_blob_transient(sqlite3_stmt *stmt, int idx, const void *data, int nBytes)
+{
+    using Dtor = void (*)(void *);
+    return p_bind_blob(stmt, idx, data, nBytes, reinterpret_cast<Dtor>(static_cast<std::uintptr_t>(-1)));
+}
+
 const unsigned char *SqliteDynamic::column_text(sqlite3_stmt *stmt, int idx)
 {
     return p_column_text(stmt, idx);
@@ -177,6 +192,22 @@ const unsigned char *SqliteDynamic::column_text(sqlite3_stmt *stmt, int idx)
 std::int64_t SqliteDynamic::column_int64(sqlite3_stmt *stmt, int idx)
 {
     return static_cast<std::int64_t>(p_column_int64(stmt, idx));
+}
+
+const void *SqliteDynamic::column_blob(sqlite3_stmt *stmt, int idx)
+{
+    if (!m_ok || p_column_blob == nullptr) {
+        return nullptr;
+    }
+    return p_column_blob(stmt, idx);
+}
+
+int SqliteDynamic::column_bytes(sqlite3_stmt *stmt, int idx)
+{
+    if (!m_ok || p_column_bytes == nullptr) {
+        return 0;
+    }
+    return p_column_bytes(stmt, idx);
 }
 
 void SqliteDynamic::free(void *p)
@@ -200,6 +231,14 @@ std::int64_t SqliteDynamic::last_insert_rowid(sqlite3 *db)
         return 0;
     }
     return static_cast<std::int64_t>(p_last_insert_rowid(db));
+}
+
+int SqliteDynamic::changes(sqlite3 *db)
+{
+    if (!m_ok || db == nullptr || p_changes == nullptr) {
+        return 0;
+    }
+    return p_changes(db);
 }
 
 } // namespace vsserver

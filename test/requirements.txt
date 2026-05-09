@@ -1,0 +1,2 @@
+# LNCS 测试脚本仅使用 Python 标准库（>= 3.8）。
+# 若后续接入 pytest / requests 等，再在此列出依赖。

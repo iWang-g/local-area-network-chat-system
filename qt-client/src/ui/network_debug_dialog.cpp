@@ -19,6 +19,7 @@ NetworkDebugDialog::NetworkDebugDialog(LanTcpClient *client, QWidget *parent)
     , m_client(client)
 {
     setWindowTitle(QStringLiteral("TCP 联调"));
+    setStyleSheet(QStringLiteral("QAbstractButton:focus { outline: none; }"));
     setMinimumSize(520, 420);
     resize(640, 480);
 

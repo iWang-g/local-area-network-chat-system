@@ -91,8 +91,12 @@ pnpm-debug.log*
 **/data/*.db-wal
 **/data/*.db-shm
 
-# Python byte code
+# Python（test/ 等脚本）
 *.pyc
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
 
 # Binaries
 # --------

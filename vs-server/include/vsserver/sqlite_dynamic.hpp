@@ -29,13 +29,18 @@ public:
     int bind_text(sqlite3_stmt *stmt, int idx, const char *val, int n, void (*destructor)(void *));
     /// 等价于 SQLITE_TRANSIENT：由 SQLite 复制字符串内容。
     int bind_text_transient(sqlite3_stmt *stmt, int idx, const char *val, int n);
+    /// 等价于 SQLITE_TRANSIENT：由 SQLite 复制 BLOB 内容。
+    int bind_blob_transient(sqlite3_stmt *stmt, int idx, const void *data, int nBytes);
 
     const unsigned char *column_text(sqlite3_stmt *stmt, int idx);
     std::int64_t column_int64(sqlite3_stmt *stmt, int idx);
+    const void *column_blob(sqlite3_stmt *stmt, int idx);
+    int column_bytes(sqlite3_stmt *stmt, int idx);
 
     void free(void *p);
     const char *errmsg(sqlite3 *db);
     std::int64_t last_insert_rowid(sqlite3 *db);
+    int changes(sqlite3 *db);
 
 private:
     bool loadDll();
@@ -53,11 +58,15 @@ private:
     int (*p_finalize)(sqlite3_stmt *) = nullptr;
     int (*p_reset)(sqlite3_stmt *) = nullptr;
     int (*p_bind_text)(sqlite3_stmt *, int, const char *, int, void (*)(void *)) = nullptr;
+    int (*p_bind_blob)(sqlite3_stmt *, int, const void *, int, void (*)(void *)) = nullptr;
     const unsigned char *(*p_column_text)(sqlite3_stmt *, int) = nullptr;
     long long (*p_column_int64)(sqlite3_stmt *, int) = nullptr;
+    const void *(*p_column_blob)(sqlite3_stmt *, int) = nullptr;
+    int (*p_column_bytes)(sqlite3_stmt *, int) = nullptr;
     void (*p_free)(void *) = nullptr;
     const char *(*p_errmsg)(sqlite3 *) = nullptr;
     long long (*p_last_insert_rowid)(sqlite3 *) = nullptr;
+    int (*p_changes)(sqlite3 *) = nullptr;
 };
 
 /// 进程内单例，供各连接线程通过 mutex 串行访问（阶段 2 简化模型）。

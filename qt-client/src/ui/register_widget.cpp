@@ -2,18 +2,42 @@
 
 #include "style/app_style.h"
 
+#include <QCheckBox>
+#include <QDateTime>
+#include <QEvent>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
+#include <QPaintEvent>
 #include <QPushButton>
 #include <QIntValidator>
+#include <QRegularExpression>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QVBoxLayout>
 
+namespace {
+
+QString timeGreetingWord()
+{
+    const int hour = QDateTime::currentDateTime().time().hour();
+    if (hour >= 6 && hour < 12) {
+        return QStringLiteral("上午好");
+    }
+    if (hour >= 12 && hour < 18) {
+        return QStringLiteral("下午好");
+    }
+    return QStringLiteral("晚上好");
+}
+
+} // namespace
+
 RegisterWidget::RegisterWidget(QWidget *parent)
-    : QWidget(parent)
+    : QDialog(parent)
     , m_cooldownTimer(new QTimer(this))
 {
     setObjectName(QStringLiteral("LanRegisterWidget"));
@@ -30,6 +54,7 @@ RegisterWidget::RegisterWidget(QWidget *parent)
         }
     }
     setStyleSheet(AppStyle::loginWidgetStyle());
+    updateTitle();
 }
 
 void RegisterWidget::buildUi()
@@ -42,48 +67,35 @@ void RegisterWidget::buildUi()
 
     auto *card = new QFrame(this);
     card->setObjectName(QStringLiteral("loginCard"));
-    card->setFixedWidth(380);
+    card->setFixedWidth(350);
     card->setMinimumHeight(560);
 
     auto *cardLay = new QVBoxLayout(card);
-    cardLay->setContentsMargins(36, 32, 36, 32);
-    cardLay->setSpacing(12);
+    cardLay->setContentsMargins(32, 32, 32, 32);
+    cardLay->setSpacing(14);
 
     auto *avatarRow = new QHBoxLayout();
     avatarRow->addStretch(1);
     auto *avatar = new QLabel(card);
-    avatar->setFixedSize(64, 64);
+    avatar->setObjectName(QStringLiteral("loginAvatar"));
+    avatar->setFixedSize(72, 72);
     avatar->setAlignment(Qt::AlignCenter);
-    avatar->setStyleSheet(QStringLiteral(
-        "QLabel { background: #e6f7ff; border-radius: 32px; font-size: 28px; color: #12b7f5; }"));
     avatar->setText(QStringLiteral("✎"));
+    avatar->setStyleSheet(QStringLiteral(
+        "QLabel#loginAvatar { background: #e6f7ff; border-radius: 36px; font-size: 32px; color: #12b7f5; }"));
     avatarRow->addWidget(avatar);
     avatarRow->addStretch(1);
     cardLay->addLayout(avatarRow);
 
-    auto *title = new QLabel(QStringLiteral("创建账号"), card);
-    title->setObjectName(QStringLiteral("loginTitle"));
-    title->setAlignment(Qt::AlignCenter);
-    cardLay->addWidget(title);
+    m_titleLabel = new QLabel(QStringLiteral("创建账号"), card);
+    m_titleLabel->setObjectName(QStringLiteral("loginTitle"));
+    m_titleLabel->setAlignment(Qt::AlignCenter);
+    cardLay->addWidget(m_titleLabel);
 
     auto *sub = new QLabel(QStringLiteral("使用邮箱注册局域网聊天"), card);
     sub->setObjectName(QStringLiteral("loginSubtitle"));
     sub->setAlignment(Qt::AlignCenter);
     cardLay->addWidget(sub);
-
-    auto *srvRow = new QHBoxLayout();
-    m_serverHost = new QLineEdit(card);
-    m_serverHost->setObjectName(QStringLiteral("loginInput"));
-    m_serverHost->setPlaceholderText(QStringLiteral("服务器地址"));
-    m_serverHost->setClearButtonEnabled(true);
-    srvRow->addWidget(m_serverHost, 1);
-    m_serverPort = new QLineEdit(card);
-    m_serverPort->setObjectName(QStringLiteral("loginInput"));
-    m_serverPort->setPlaceholderText(QStringLiteral("端口"));
-    m_serverPort->setFixedWidth(88);
-    m_serverPort->setValidator(new QIntValidator(1, 65535, m_serverPort));
-    srvRow->addWidget(m_serverPort);
-    cardLay->addLayout(srvRow);
 
     m_errorLabel = new QLabel(card);
     m_errorLabel->setObjectName(QStringLiteral("loginErrorLabel"));
@@ -92,10 +104,27 @@ void RegisterWidget::buildUi()
     m_errorLabel->setAlignment(Qt::AlignCenter);
     cardLay->addWidget(m_errorLabel);
 
+    auto *srvRow = new QHBoxLayout();
+    m_serverHost = new QLineEdit(card);
+    m_serverHost->setObjectName(QStringLiteral("loginInput"));
+    m_serverHost->setPlaceholderText(QStringLiteral("服务器地址"));
+    m_serverHost->setClearButtonEnabled(true);
+    m_serverHost->setMinimumHeight(40);
+    srvRow->addWidget(m_serverHost, 1);
+    m_serverPort = new QLineEdit(card);
+    m_serverPort->setObjectName(QStringLiteral("loginInput"));
+    m_serverPort->setPlaceholderText(QStringLiteral("端口"));
+    m_serverPort->setFixedWidth(88);
+    m_serverPort->setMinimumHeight(40);
+    m_serverPort->setValidator(new QIntValidator(1, 65535, m_serverPort));
+    srvRow->addWidget(m_serverPort);
+    cardLay->addLayout(srvRow);
+
     m_email = new QLineEdit(card);
     m_email->setObjectName(QStringLiteral("loginInput"));
     m_email->setPlaceholderText(QStringLiteral("邮箱"));
     m_email->setClearButtonEnabled(true);
+    m_email->setMinimumHeight(40);
     cardLay->addWidget(m_email);
 
     auto *codeRow = new QHBoxLayout();
@@ -103,11 +132,12 @@ void RegisterWidget::buildUi()
     m_emailCode->setObjectName(QStringLiteral("loginInput"));
     m_emailCode->setPlaceholderText(QStringLiteral("邮箱验证码"));
     m_emailCode->setClearButtonEnabled(true);
+    m_emailCode->setMinimumHeight(40);
     codeRow->addWidget(m_emailCode, 1);
     m_sendCodeBtn = new QPushButton(QStringLiteral("获取验证码"), card);
     m_sendCodeBtn->setObjectName(QStringLiteral("loginSecondaryButton"));
     m_sendCodeBtn->setCursor(Qt::PointingHandCursor);
-    m_sendCodeBtn->setMinimumHeight(38);
+    m_sendCodeBtn->setMinimumHeight(40);
     m_sendCodeBtn->setFixedWidth(112);
     codeRow->addWidget(m_sendCodeBtn);
     cardLay->addLayout(codeRow);
@@ -120,25 +150,42 @@ void RegisterWidget::buildUi()
     m_codeHintLabel->setStyleSheet(QStringLiteral("color: #52c41a; font-size: 12px;"));
     cardLay->addWidget(m_codeHintLabel);
 
+    auto *pwdRow = new QHBoxLayout();
+    pwdRow->setSpacing(8);
     m_password = new QLineEdit(card);
     m_password->setObjectName(QStringLiteral("loginInput"));
     m_password->setPlaceholderText(QStringLiteral("密码"));
     m_password->setEchoMode(QLineEdit::Password);
-    cardLay->addWidget(m_password);
+    m_password->setMinimumHeight(40);
+    pwdRow->addWidget(m_password, 1);
+    m_pwdVisibleCheck = new QCheckBox(QStringLiteral("显示"), card);
+    m_pwdVisibleCheck->setObjectName(QStringLiteral("passwordVisibleCheck"));
+    m_pwdVisibleCheck->setFocusPolicy(Qt::ClickFocus);
+    pwdRow->addWidget(m_pwdVisibleCheck, 0, Qt::AlignVCenter);
+    cardLay->addLayout(pwdRow);
 
+    auto *pwd2Row = new QHBoxLayout();
+    pwd2Row->setSpacing(8);
     m_password2 = new QLineEdit(card);
     m_password2->setObjectName(QStringLiteral("loginInput"));
     m_password2->setPlaceholderText(QStringLiteral("确认密码"));
     m_password2->setEchoMode(QLineEdit::Password);
-    cardLay->addWidget(m_password2);
+    m_password2->setMinimumHeight(40);
+    pwd2Row->addWidget(m_password2, 1);
+    m_pwd2VisibleCheck = new QCheckBox(QStringLiteral("显示"), card);
+    m_pwd2VisibleCheck->setObjectName(QStringLiteral("passwordVisibleCheck"));
+    m_pwd2VisibleCheck->setFocusPolicy(Qt::ClickFocus);
+    pwd2Row->addWidget(m_pwd2VisibleCheck, 0, Qt::AlignVCenter);
+    cardLay->addLayout(pwd2Row);
 
-    m_nickname = new QLineEdit(card);
-    m_nickname->setObjectName(QStringLiteral("loginInput"));
-    m_nickname->setPlaceholderText(QStringLiteral("昵称（可选）"));
-    m_nickname->setClearButtonEnabled(true);
-    cardLay->addWidget(m_nickname);
+    m_username = new QLineEdit(card);
+    m_username->setObjectName(QStringLiteral("loginInput"));
+    m_username->setPlaceholderText(QStringLiteral("用户名（中英文或数字，2～32 位）"));
+    m_username->setClearButtonEnabled(true);
+    m_username->setMinimumHeight(40);
+    cardLay->addWidget(m_username);
 
-    auto *regBtn = new QPushButton(QStringLiteral("注 册"), card);
+    auto *regBtn = new QPushButton(QStringLiteral("注册"), card);
     regBtn->setObjectName(QStringLiteral("loginPrimaryButton"));
     regBtn->setCursor(Qt::PointingHandCursor);
     regBtn->setMinimumHeight(44);
@@ -160,12 +207,134 @@ void RegisterWidget::buildUi()
     connect(m_email, &QLineEdit::returnPressed, this, &RegisterWidget::onSubmitClicked);
     connect(m_password, &QLineEdit::returnPressed, this, &RegisterWidget::onSubmitClicked);
     connect(m_password2, &QLineEdit::returnPressed, this, &RegisterWidget::onSubmitClicked);
+    connect(m_email, &QLineEdit::textChanged, this, &RegisterWidget::onEmailTextChanged);
+    connect(m_pwdVisibleCheck, &QCheckBox::toggled, this, &RegisterWidget::onPwdVisibleToggled);
+    connect(m_pwd2VisibleCheck, &QCheckBox::toggled, this, &RegisterWidget::onPwd2VisibleToggled);
+
+    for (QLineEdit *ed :
+         {m_serverHost, m_serverPort, m_email, m_emailCode, m_password, m_password2, m_username}) {
+        ed->installEventFilter(this);
+    }
+}
+
+void RegisterWidget::paintEvent(QPaintEvent *event)
+{
+    Q_UNUSED(event);
+    QPainter p(this);
+    AppStyle::paintAuthPageBackground(&p, rect());
+}
+
+void RegisterWidget::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Escape) {
+        event->ignore();
+        return;
+    }
+    QDialog::keyPressEvent(event);
+}
+
+void RegisterWidget::updateTitle()
+{
+    if (!m_titleLabel) {
+        return;
+    }
+    const QString email = m_email ? m_email->text().trimmed() : QString();
+    const QString greet = timeGreetingWord();
+    if (email.isEmpty()) {
+        m_titleLabel->setText(QStringLiteral("创建账号"));
+        return;
+    }
+    QString local = email;
+    if (const int at = email.indexOf(QLatin1Char('@')); at > 0) {
+        local = email.left(at);
+    }
+    m_titleLabel->setText(QStringLiteral("%1，%2，注册新账号").arg(local, greet));
+}
+
+void RegisterWidget::onEmailTextChanged(const QString &)
+{
+    updateTitle();
+}
+
+void RegisterWidget::onPwdVisibleToggled(bool checked)
+{
+    if (m_password) {
+        m_password->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::Password);
+    }
+}
+
+void RegisterWidget::onPwd2VisibleToggled(bool checked)
+{
+    if (m_password2) {
+        m_password2->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::Password);
+    }
+}
+
+bool RegisterWidget::cycleFieldFocusWithArrow(QLineEdit *current, int key)
+{
+    QLineEdit *const chain[] = {m_serverHost, m_serverPort, m_email, m_emailCode,
+                                m_password, m_password2, m_username};
+    constexpr int n = 7;
+    int idx = -1;
+    for (int i = 0; i < n; ++i) {
+        if (chain[i] == current) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0) {
+        return false;
+    }
+    const int delta = (key == Qt::Key_Down) ? 1 : -1;
+    const int next = (idx + delta + n) % n;
+    chain[next]->setFocus(Qt::ShortcutFocusReason);
+    return true;
+}
+
+void RegisterWidget::applyCtrlHToFocusedPassword(QLineEdit *field)
+{
+    if (field == m_password && m_pwdVisibleCheck) {
+        const bool toPlain = (m_password->echoMode() == QLineEdit::Password);
+        m_password->setEchoMode(toPlain ? QLineEdit::Normal : QLineEdit::Password);
+        QSignalBlocker b(m_pwdVisibleCheck);
+        m_pwdVisibleCheck->setChecked(m_password->echoMode() == QLineEdit::Normal);
+        return;
+    }
+    if (field == m_password2 && m_pwd2VisibleCheck) {
+        const bool toPlain = (m_password2->echoMode() == QLineEdit::Password);
+        m_password2->setEchoMode(toPlain ? QLineEdit::Normal : QLineEdit::Password);
+        QSignalBlocker b(m_pwd2VisibleCheck);
+        m_pwd2VisibleCheck->setChecked(m_password2->echoMode() == QLineEdit::Normal);
+    }
+}
+
+bool RegisterWidget::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() == QEvent::KeyPress) {
+        auto *ke = static_cast<QKeyEvent *>(event);
+        auto *le = qobject_cast<QLineEdit *>(watched);
+        if (le && ke->modifiers() == Qt::NoModifier) {
+            if (ke->key() == Qt::Key_Up || ke->key() == Qt::Key_Down) {
+                if (cycleFieldFocusWithArrow(le, ke->key())) {
+                    return true;
+                }
+            }
+        }
+        if (le && ke->modifiers() == Qt::ControlModifier && ke->key() == Qt::Key_H) {
+            if (le == m_password || le == m_password2) {
+                applyCtrlHToFocusedPassword(le);
+                return true;
+            }
+        }
+    }
+    return QDialog::eventFilter(watched, event);
 }
 
 void RegisterWidget::clearError()
 {
     if (m_errorLabel) {
         m_errorLabel->clear();
+        m_errorLabel->setStyleSheet(QString());
         m_errorLabel->setVisible(false);
     }
 }
@@ -174,6 +343,7 @@ void RegisterWidget::showError(const QString &message)
 {
     clearCodeSentHint();
     if (m_errorLabel) {
+        m_errorLabel->setStyleSheet(QString());
         m_errorLabel->setText(message);
         m_errorLabel->setVisible(true);
     }
@@ -293,11 +463,28 @@ void RegisterWidget::onSubmitClicked()
         showError(QStringLiteral("两次输入的密码不一致"));
         return;
     }
-    emit registerSubmitted(email, pwd, m_nickname ? m_nickname->text().trimmed() : QString(), code);
+    const QString uname = m_username ? m_username->text().trimmed() : QString();
+    if (uname.isEmpty()) {
+        showError(QStringLiteral("请填写用户名"));
+        return;
+    }
+    if (!isValidUsername(uname)) {
+        showError(QStringLiteral("用户名为 2～32 位，仅允许中英文或数字"));
+        return;
+    }
+    emit registerSubmitted(email, pwd, uname, code);
 }
 
 void RegisterWidget::onBackClicked()
 {
     clearError();
     emit backToLoginRequested();
+}
+
+bool RegisterWidget::isValidUsername(const QString &text)
+{
+    const QString t = text.trimmed();
+    static const QRegularExpression re(QStringLiteral(R"(^[\p{L}\p{N}]{2,32}$)"),
+                                       QRegularExpression::UseUnicodePropertiesOption);
+    return re.match(t).hasMatch();
 }
