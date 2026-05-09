@@ -24,6 +24,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -184,7 +185,8 @@ static void abortTransferDb(const std::int64_t transferId)
 
 FileOfferResult fileRelayOffer(const std::int64_t fromUserId, const std::int64_t peerUserId,
                                std::string rawFileNameUtf8, const std::uint64_t fileSizeBytes,
-                               std::string sha256HexLower, const bool asSticker)
+                               std::string sha256HexLower, const bool asSticker,
+                               const std::optional<std::uint32_t> chunkPlainMaxBinary)
 {
     FileOfferResult r;
     if (fromUserId <= 0 || peerUserId <= 0 || fromUserId == peerUserId) {
@@ -242,14 +244,15 @@ FileOfferResult fileRelayOffer(const std::int64_t fromUserId, const std::int64_t
 
     r.ok = true;
     r.transferId = ins.transferId;
-    r.jsonOfferOkUtf8 = buildFileOfferOkJson(ins.transferId, kFileChunkPlainMax);
+    r.jsonOfferOkUtf8 = buildFileOfferOkJson(ins.transferId, kFileChunkPlainMax, chunkPlainMaxBinary);
     r.jsonIncomingUtf8 = buildFileIncomingJson(ins.transferId, fromUserId, name, fileSizeBytes, sha256HexLower);
     return r;
 }
 
 FileOfferResult fileRelayOfferServerBufferPeerOffline(const std::int64_t fromUserId, const std::int64_t peerUserId,
                                                       std::string rawFileNameUtf8, const std::uint64_t fileSizeBytes,
-                                                      std::string sha256HexLower, const bool asSticker)
+                                                      std::string sha256HexLower, const bool asSticker,
+                                                      const std::optional<std::uint32_t> chunkPlainMaxBinary)
 {
     FileOfferResult r;
     if (fromUserId <= 0 || peerUserId <= 0 || fromUserId == peerUserId) {
@@ -316,7 +319,7 @@ FileOfferResult fileRelayOfferServerBufferPeerOffline(const std::int64_t fromUse
 
     r.ok = true;
     r.transferId = ins.transferId;
-    r.jsonOfferOkUtf8 = buildFileOfferOkJson(ins.transferId, kFileChunkPlainMax);
+    r.jsonOfferOkUtf8 = buildFileOfferOkJson(ins.transferId, kFileChunkPlainMax, chunkPlainMaxBinary);
     r.jsonIncomingUtf8.clear();
     return r;
 }
@@ -540,6 +543,87 @@ FileChunkRelayResult fileRelayOnSenderChunk(const std::int64_t selfUserId, const
     r.ok = true;
     r.pushToUserId = t.toUserId;
     r.pushJsonUtf8 = buildFileChunkPushJson(transferId, seq, dataB64Utf8);
+    return r;
+}
+
+FileChunkRelayResult fileRelayOnSenderChunkPlain(const std::int64_t selfUserId, const std::int64_t transferId,
+                                                 const std::uint32_t seq, const std::vector<std::uint8_t> &plain)
+{
+    FileChunkRelayResult r;
+    const std::size_t decSz = plain.size();
+    if (decSz == 0 || decSz > kFileChunkBinaryPlainMax) {
+        r.errCode = kErrFileChunk;
+        r.message = "分片大小无效";
+        return r;
+    }
+
+    std::lock_guard<std::mutex> lk(g_mu);
+    const auto it = g_byId.find(transferId);
+    if (it == g_byId.end()) {
+        r.errCode = kErrFileNotFound;
+        r.message = "传输不存在或已结束";
+        return r;
+    }
+    Rt &t = it->second;
+    if (t.fromUserId != selfUserId) {
+        r.errCode = kErrFileWrongRole;
+        r.message = "仅发送方可上传分片";
+        return r;
+    }
+    if (t.phase != Rt::Phase::Streaming) {
+        r.errCode = kErrFileNotFound;
+        r.message = "传输未就绪或已结束";
+        return r;
+    }
+    if (seq != t.nextSeqExpected) {
+        r.errCode = kErrFileSeq;
+        r.message = "分片序号错误";
+        return r;
+    }
+    if (t.bytesForwarded + decSz > t.fileSize) {
+        r.errCode = kErrFileChunk;
+        r.message = "分片总长度超过文件大小";
+        return r;
+    }
+
+    if (t.serverBufferPeerOffline) {
+        if (!t.serverChunkOut) {
+            try {
+                t.serverChunkOut = std::make_unique<std::ofstream>(t.serverPartialPath.u8string(),
+                                                                 std::ios::binary | std::ios::trunc);
+            } catch (const std::exception &) {
+                r.errCode = kErrDbUnavailable;
+                r.message = "无法创建临时文件";
+                return r;
+            }
+            if (!t.serverChunkOut->good()) {
+                t.serverChunkOut.reset();
+                r.errCode = kErrDbUnavailable;
+                r.message = "无法创建临时文件";
+                return r;
+            }
+        }
+        t.serverChunkOut->write(reinterpret_cast<const char *>(plain.data()), static_cast<std::streamsize>(decSz));
+        if (!t.serverChunkOut->good()) {
+            r.errCode = kErrFileChunk;
+            r.message = "写入临时文件失败";
+            return r;
+        }
+        t.nextSeqExpected = seq + 1;
+        t.bytesForwarded += decSz;
+        r.ok = true;
+        r.pushToUserId = 0;
+        r.pushJsonUtf8.clear();
+        r.pushBinaryPayload.clear();
+        return r;
+    }
+
+    t.nextSeqExpected = seq + 1;
+    t.bytesForwarded += decSz;
+    r.ok = true;
+    r.pushToUserId = t.toUserId;
+    r.pushBinaryPayload =
+        buildLnCbChunkPushPayload(transferId, seq, plain.empty() ? nullptr : plain.data(), plain.size());
     return r;
 }
 

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -35,7 +36,10 @@ struct FileChunkRelayResult {
     int errCode = 0;
     std::string message;
     std::int64_t pushToUserId = 0;
+    /// JSON Base64 路径（与 `pushBinaryPayload` 二选一）。
     std::string pushJsonUtf8;
+    /// 二进制 LNCB 下行负载（与 `pushJsonUtf8` 二选一）。
+    std::string pushBinaryPayload;
 };
 
 struct FileDoneRelayResult {
@@ -49,12 +53,14 @@ struct FileDoneRelayResult {
 };
 
 FileOfferResult fileRelayOffer(std::int64_t fromUserId, std::int64_t peerUserId, std::string rawFileNameUtf8,
-                               std::uint64_t fileSizeBytes, std::string sha256HexLower, bool asSticker = false);
+                               std::uint64_t fileSizeBytes, std::string sha256HexLower, bool asSticker = false,
+                               std::optional<std::uint32_t> chunkPlainMaxBinary = std::nullopt);
 
 /// 对方离线：在服务端磁盘缓冲全部分片，完成后写入会话（无需对端 `file_accept`）。`asSticker` 写入消息 JSON。
 FileOfferResult fileRelayOfferServerBufferPeerOffline(std::int64_t fromUserId, std::int64_t peerUserId,
                                                       std::string rawFileNameUtf8, std::uint64_t fileSizeBytes,
-                                                      std::string sha256HexLower, bool asSticker);
+                                                      std::string sha256HexLower, bool asSticker,
+                                                      std::optional<std::uint32_t> chunkPlainMaxBinary = std::nullopt);
 
 /// 若存在可读的离线缓冲文件，返回其 UTF-8 路径；否则返回空。
 /// `expectedFileSizeBytes > 0` 时要求文件大小与声明一致；先查 `sticker_cache`，再查未 rename 的 `offline_partial/*.part`。
@@ -66,6 +72,10 @@ FileNotifyResult fileRelayReject(std::int64_t selfUserId, std::int64_t transferI
 
 FileChunkRelayResult fileRelayOnSenderChunk(std::int64_t selfUserId, std::int64_t transferId, std::uint32_t seq,
                                             const std::string &dataB64Utf8);
+
+/// 二进制明文分片（与 `fileRelayOnSenderChunk` 互斥使用场景）。
+FileChunkRelayResult fileRelayOnSenderChunkPlain(std::int64_t selfUserId, std::int64_t transferId, std::uint32_t seq,
+                                                 const std::vector<std::uint8_t> &plain);
 
 FileDoneRelayResult fileRelayOnSenderDone(std::int64_t selfUserId, std::int64_t transferId);
 

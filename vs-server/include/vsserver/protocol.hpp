@@ -59,6 +59,19 @@ inline constexpr int kErrPeerOffline = 5009;
 
 /// 明文分片上限（与 `wire::kMaxFramePayload` 内 Base64 预留一致）。
 inline constexpr std::uint32_t kFileChunkPlainMax = 65536;
+
+/// 二进制文件分片帧（LNCB）魔数，负载首 4 字节；与 JSON 对象首字节 `{` 区分。
+inline constexpr char kLnCbMagic[4] = {'L', 'N', 'C', 'B'};
+inline constexpr std::uint16_t kLnCbVersion = 1;
+/// 下行 `file_chunk_push` 二进制子类型。
+inline constexpr std::uint16_t kLnCbKindChunkPush = 1;
+/// C→S 二进制分片头：magic(4)+ver(2)+transfer_id(8)+seq(4)+token(64)+plain_len(4)=86。
+inline constexpr std::size_t kLnCbSenderChunkHeaderSize = 86;
+/// S→C 二进制分片头：magic(4)+ver(2)+kind(2)+transfer_id(8)+seq(4)+plain_len(4)=24。
+inline constexpr std::size_t kLnCbChunkPushHeaderSize = 24;
+/// 单帧内明文最大长度（256KiB 负载 − 发送头）；与 `wire::kMaxFramePayload` 对齐。
+inline constexpr std::uint32_t kFileChunkBinaryPlainMax =
+    static_cast<std::uint32_t>((256U * 1024U) - kLnCbSenderChunkHeaderSize);
 /// 单文件传输大小上限（字节）。
 inline constexpr std::uint64_t kFileTransferMaxBytes = 512ULL * 1024 * 1024;
 /// 对方离线时，仅「表情」可走服务端内存缓冲 + 落盘，单条大小上限（字节）。

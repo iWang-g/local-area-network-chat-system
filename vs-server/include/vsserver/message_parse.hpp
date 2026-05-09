@@ -90,8 +90,28 @@ std::string buildMsgClearOkJson(std::int64_t peerUserId, std::int64_t deletedRow
 /// 对端在线时下推：发起清空的一方 `by_user_id`。
 std::string buildMsgConvClearedJson(std::int64_t byUserId);
 
-/// 阶段 6：文件分片（JSON + Base64）
-std::string buildFileOfferOkJson(std::int64_t transferId, std::uint32_t chunkPlainMax);
+/// 阶段 6：文件分片（JSON + Base64）；若给定 `chunkPlainMaxBinary` 则附带二进制分片能力字段。
+std::string buildFileOfferOkJson(std::int64_t transferId, std::uint32_t chunkPlainMax,
+                                 std::optional<std::uint32_t> chunkPlainMaxBinary = std::nullopt);
+
+/// `hello_ok`：可选宣告二进制文件分片（客户端需在 hello 中带 `capabilities` 含 `file_chunk_binary_v1`）。
+std::string buildHelloOkJson(bool fileChunkBinary);
+
+/// C→S：二进制 `file_chunk` 负载（不含 4 字节长度前缀）。
+std::string buildLnCbSenderChunkPayload(std::int64_t transferId, std::uint32_t seq, const std::string &tokenHex64,
+                                        const std::uint8_t *plain, std::size_t plainLen);
+/// S→C：二进制 `file_chunk_push` 负载（不含长度前缀）。
+std::string buildLnCbChunkPushPayload(std::int64_t transferId, std::uint32_t seq, const std::uint8_t *plain,
+                                      std::size_t plainLen);
+
+struct LnCbSenderChunkParse {
+    std::int64_t transferId = 0;
+    std::uint32_t seq = 0;
+    std::string tokenHex64;
+    std::vector<std::uint8_t> plain;
+};
+/// 解析 C→S LNCB 分片；成功返回 true。
+bool parseLnCbSenderChunkPayload(const std::string &payload, LnCbSenderChunkParse &out, std::string &err);
 /// 已向接收方投递 `file_incoming` 后发给发送方，用于将气泡状态更新为「已发送」。
 std::string buildFileOfferDeliveredJson(std::int64_t transferId);
 std::string buildFileIncomingJson(std::int64_t transferId, std::int64_t fromUserId, const std::string &fileNameUtf8,

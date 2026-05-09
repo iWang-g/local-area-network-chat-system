@@ -15,6 +15,7 @@
 #include <QScreen>
 #include <QSettings>
 #include <QStackedWidget>
+#include <QJsonArray>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -96,6 +97,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     connect(m_client, &LanTcpClient::socketConnected, this, &MainWindow::onTcpSocketConnected);
     connect(m_client, &LanTcpClient::jsonReceived, this, &MainWindow::onTcpJsonReceived);
+    connect(m_client, &LanTcpClient::binaryPayloadReceived, this, &MainWindow::onTcpBinaryPayload);
     connect(m_client, &LanTcpClient::protocolError, this, &MainWindow::onTcpProtocolError);
 
     m_workspace = buildChatWorkspacePage();
@@ -322,6 +324,9 @@ void MainWindow::onTcpSocketConnected()
     hello.insert(QStringLiteral("type"), QStringLiteral("hello"));
     hello.insert(QStringLiteral("magic"), QStringLiteral("LNCS"));
     hello.insert(QStringLiteral("version"), 1);
+    QJsonArray caps;
+    caps.append(QStringLiteral("file_chunk_binary_v1"));
+    hello.insert(QStringLiteral("capabilities"), caps);
     m_client->sendJsonObject(hello);
 }
 
@@ -332,6 +337,8 @@ void MainWindow::onTcpJsonReceived(const QJsonObject &obj)
         if (m_authPhase != 1) {
             return;
         }
+        m_srvFileChunkBinary = obj.value(QStringLiteral("file_chunk_binary")).toBool();
+        m_srvChunkPlainMaxBinary = obj.value(QStringLiteral("chunk_plain_max_binary")).toInt(0);
         m_authPhase = 2;
         if (m_pendingEmailCodeOnly) {
             QJsonObject req;
@@ -388,7 +395,8 @@ void MainWindow::onTcpJsonReceived(const QJsonObject &obj)
         }
         showChatPage(accountEmail);
         if (m_chat) {
-            m_chat->setSession(m_client, m_sessionToken, m_sessionUserId);
+            m_chat->setSession(m_client, m_sessionToken, m_sessionUserId, m_srvFileChunkBinary,
+                               m_srvChunkPlainMaxBinary);
         }
         return;
     }
@@ -425,6 +433,13 @@ void MainWindow::onTcpJsonReceived(const QJsonObject &obj)
 
     if (m_stack->currentWidget() == m_workspace && !m_sessionToken.isEmpty() && m_chat) {
         m_chat->handleServerJson(obj);
+    }
+}
+
+void MainWindow::onTcpBinaryPayload(const QByteArray &payload)
+{
+    if (m_stack->currentWidget() == m_workspace && !m_sessionToken.isEmpty() && m_chat) {
+        m_chat->handleBinaryPayload(payload);
     }
 }
 

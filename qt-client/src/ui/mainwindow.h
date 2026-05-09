@@ -38,6 +38,7 @@ private slots:
     void openProfileDialog();
     void onTcpSocketConnected();
     void onTcpJsonReceived(const QJsonObject &obj);
+    void onTcpBinaryPayload(const QByteArray &payload);
     void onTcpProtocolError(const QString &message);
 
 private:
@@ -75,6 +76,9 @@ private:
     QString m_sessionToken;
     QString m_sessionUsername;
     qint64 m_sessionUserId = 0;
+    /// 来自 `hello_ok`：服务端是否支持二进制文件分片及单片明文上限。
+    bool m_srvFileChunkBinary = false;
+    int m_srvChunkPlainMaxBinary = 0;
 };
 
 #endif // MAINWINDOW_H

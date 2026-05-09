@@ -1,4 +1,5 @@
 #include "vsserver/message_parse.hpp"
+#include "vsserver/protocol.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -8,6 +9,7 @@
 
 #pragma comment(lib, "crypt32.lib")
 
+#include <cstring>
 #include <regex>
 #include <sstream>
 #include <string_view>
@@ -353,12 +355,146 @@ std::string buildMsgConvClearedJson(const std::int64_t byUserId)
     return std::string(R"({"type":"msg_conv_cleared","by_user_id":)") + std::to_string(byUserId) + '}';
 }
 
-std::string buildFileOfferOkJson(const std::int64_t transferId, const std::uint32_t chunkPlainMax)
+std::string buildHelloOkJson(bool fileChunkBinary)
+{
+    if (!fileChunkBinary) {
+        return R"({"type":"hello_ok","version":1})";
+    }
+    std::ostringstream oss;
+    oss << R"({"type":"hello_ok","version":1,"file_chunk_binary":true,"chunk_plain_max_binary":)"
+        << kFileChunkBinaryPlainMax << "}";
+    return oss.str();
+}
+
+std::string buildFileOfferOkJson(const std::int64_t transferId, const std::uint32_t chunkPlainMax,
+                                 const std::optional<std::uint32_t> chunkPlainMaxBinary)
 {
     std::ostringstream oss;
-    oss << R"({"type":"file_offer_ok","transfer_id":)" << transferId << R"(,"chunk_plain_max":)" << chunkPlainMax
-        << '}';
+    oss << R"({"type":"file_offer_ok","transfer_id":)" << transferId << R"(,"chunk_plain_max":)" << chunkPlainMax;
+    if (chunkPlainMaxBinary.has_value()) {
+        oss << R"(,"file_chunk_binary":true,"chunk_plain_max_binary":)" << *chunkPlainMaxBinary;
+    }
+    oss << '}';
     return oss.str();
+}
+
+namespace {
+
+void appendBe16(std::string &s, std::uint16_t v)
+{
+    s.push_back(static_cast<char>((v >> 8) & 0xFF));
+    s.push_back(static_cast<char>(v & 0xFF));
+}
+
+void appendBe32(std::string &s, std::uint32_t v)
+{
+    s.push_back(static_cast<char>((v >> 24) & 0xFF));
+    s.push_back(static_cast<char>((v >> 16) & 0xFF));
+    s.push_back(static_cast<char>((v >> 8) & 0xFF));
+    s.push_back(static_cast<char>(v & 0xFF));
+}
+
+void appendBe64(std::string &s, std::int64_t v)
+{
+    const auto u = static_cast<std::uint64_t>(v);
+    for (int i = 7; i >= 0; --i) {
+        s.push_back(static_cast<char>((u >> (i * 8)) & 0xFF));
+    }
+}
+
+std::uint16_t readBe16(const unsigned char *p)
+{
+    return static_cast<std::uint16_t>((static_cast<std::uint16_t>(p[0]) << 8) | static_cast<std::uint16_t>(p[1]));
+}
+
+std::uint32_t readBe32(const unsigned char *p)
+{
+    return (static_cast<std::uint32_t>(p[0]) << 24) | (static_cast<std::uint32_t>(p[1]) << 16) |
+           (static_cast<std::uint32_t>(p[2]) << 8) | static_cast<std::uint32_t>(p[3]);
+}
+
+std::int64_t readBe64(const unsigned char *p)
+{
+    const auto u = (static_cast<std::uint64_t>(p[0]) << 56) | (static_cast<std::uint64_t>(p[1]) << 48) |
+                     (static_cast<std::uint64_t>(p[2]) << 40) | (static_cast<std::uint64_t>(p[3]) << 32) |
+                     (static_cast<std::uint64_t>(p[4]) << 24) | (static_cast<std::uint64_t>(p[5]) << 16) |
+                     (static_cast<std::uint64_t>(p[6]) << 8) | static_cast<std::uint64_t>(p[7]);
+    return static_cast<std::int64_t>(u);
+}
+
+} // namespace
+
+std::string buildLnCbSenderChunkPayload(const std::int64_t transferId, const std::uint32_t seq,
+                                        const std::string &tokenHex64, const std::uint8_t *plain,
+                                        const std::size_t plainLen)
+{
+    std::string out;
+    out.reserve(kLnCbSenderChunkHeaderSize + plainLen);
+    out.append(kLnCbMagic, kLnCbMagic + 4);
+    appendBe16(out, kLnCbVersion);
+    appendBe64(out, transferId);
+    appendBe32(out, seq);
+    if (tokenHex64.size() != 64) {
+        return {};
+    }
+    out.append(tokenHex64);
+    appendBe32(out, static_cast<std::uint32_t>(plainLen));
+    if (plainLen > 0 && plain != nullptr) {
+        out.append(reinterpret_cast<const char *>(plain), plainLen);
+    }
+    return out;
+}
+
+std::string buildLnCbChunkPushPayload(const std::int64_t transferId, const std::uint32_t seq, const std::uint8_t *plain,
+                                      const std::size_t plainLen)
+{
+    std::string out;
+    out.reserve(kLnCbChunkPushHeaderSize + plainLen);
+    out.append(kLnCbMagic, kLnCbMagic + 4);
+    appendBe16(out, kLnCbVersion);
+    appendBe16(out, kLnCbKindChunkPush);
+    appendBe64(out, transferId);
+    appendBe32(out, seq);
+    appendBe32(out, static_cast<std::uint32_t>(plainLen));
+    if (plainLen > 0 && plain != nullptr) {
+        out.append(reinterpret_cast<const char *>(plain), plainLen);
+    }
+    return out;
+}
+
+bool parseLnCbSenderChunkPayload(const std::string &payload, LnCbSenderChunkParse &out, std::string &err)
+{
+    err.clear();
+    if (payload.size() < kLnCbSenderChunkHeaderSize) {
+        err = "LNCB payload too short";
+        return false;
+    }
+    const auto *p = reinterpret_cast<const unsigned char *>(payload.data());
+    if (std::memcmp(p, kLnCbMagic, 4) != 0) {
+        err = "LNCB magic mismatch";
+        return false;
+    }
+    if (readBe16(p + 4) != kLnCbVersion) {
+        err = "LNCB version unsupported";
+        return false;
+    }
+    out.transferId = readBe64(p + 6);
+    out.seq = readBe32(p + 14);
+    out.tokenHex64.assign(reinterpret_cast<const char *>(p + 18), 64);
+    const std::uint32_t plainLen = readBe32(p + 82);
+    if (plainLen == 0 || plainLen > kFileChunkBinaryPlainMax) {
+        err = "LNCB plain length invalid";
+        return false;
+    }
+    if (payload.size() != kLnCbSenderChunkHeaderSize + plainLen) {
+        err = "LNCB frame size mismatch";
+        return false;
+    }
+    out.plain.resize(plainLen);
+    if (plainLen > 0) {
+        std::memcpy(out.plain.data(), p + kLnCbSenderChunkHeaderSize, plainLen);
+    }
+    return true;
 }
 
 std::string buildFileOfferDeliveredJson(const std::int64_t transferId)

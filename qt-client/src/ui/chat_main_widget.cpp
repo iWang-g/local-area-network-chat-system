@@ -29,6 +29,8 @@
 #include <QMenu>
 #include <QUrl>
 
+#include <cstring>
+
 #include <QCryptographicHash>
 #include <QDate>
 #include <QDateTime>
@@ -43,6 +45,72 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+
+namespace {
+
+static quint16 readU16Be(const char *p)
+{
+    const auto *u = reinterpret_cast<const unsigned char *>(p);
+    return quint16((quint16(u[0]) << 8) | quint16(u[1]));
+}
+
+static quint32 readU32Be(const char *p)
+{
+    const auto *u = reinterpret_cast<const unsigned char *>(p);
+    return (quint32(u[0]) << 24) | (quint32(u[1]) << 16) | (quint32(u[2]) << 8) | quint32(u[3]);
+}
+
+static qint64 readI64Be(const char *p)
+{
+    const auto *u = reinterpret_cast<const unsigned char *>(p);
+    const quint64 v = (quint64(u[0]) << 56) | (quint64(u[1]) << 48) | (quint64(u[2]) << 40) |
+                      (quint64(u[3]) << 32) | (quint64(u[4]) << 24) | (quint64(u[5]) << 16) |
+                      (quint64(u[6]) << 8) | quint64(u[7]);
+    return qint64(v);
+}
+
+static void appendU16(QByteArray &o, quint16 v)
+{
+    o.append(char((v >> 8) & 255));
+    o.append(char(v & 255));
+}
+
+static void appendU32(QByteArray &o, quint32 v)
+{
+    o.append(char((v >> 24) & 255));
+    o.append(char((v >> 16) & 255));
+    o.append(char((v >> 8) & 255));
+    o.append(char(v & 255));
+}
+
+static void appendI64(QByteArray &o, qint64 x)
+{
+    const quint64 v = quint64(x);
+    for (int i = 7; i >= 0; --i) {
+        o.append(char((v >> (i * 8)) & 255));
+    }
+}
+
+static QByteArray buildLnCbSenderChunkFrame(qint64 transferId, quint32 seq, const QString &tokenHex64,
+                                            const QByteArray &plain)
+{
+    QByteArray o;
+    o.reserve(86 + plain.size());
+    o.append("LNCB", 4);
+    appendU16(o, 1);
+    appendI64(o, transferId);
+    appendU32(o, seq);
+    const QByteArray tok = tokenHex64.toLatin1();
+    if (tok.size() != 64) {
+        return {};
+    }
+    o.append(tok);
+    appendU32(o, quint32(plain.size()));
+    o.append(plain);
+    return o;
+}
+
+} // namespace
 #include <QListWidget>
 #include <QIcon>
 #include <QListWidgetItem>
@@ -360,11 +428,13 @@ void ChatMainWidget::setUserEmail(const QString &email)
     }
 }
 
-void ChatMainWidget::setSession(LanTcpClient *client, const QString &token, qint64 userId)
+void ChatMainWidget::setSession(LanTcpClient *client, const QString &token, qint64 userId, bool fileChunkBinary,
+                                int chunkPlainMaxBinary)
 {
     m_sessionClient = client;
     m_sessionToken = token;
     m_sessionUserId = userId;
+    m_useBinaryFileChunk = fileChunkBinary && chunkPlainMaxBinary > 0 && token.size() == 64;
     m_localPathByTransferId.clear();
     LocalProfile::loadTransferPathMap(m_userEmail, &m_localPathByTransferId);
     if (m_contacts) {
@@ -387,6 +457,7 @@ void ChatMainWidget::setSession(LanTcpClient *client, const QString &token, qint
 
 void ChatMainWidget::clearSession()
 {
+    m_useBinaryFileChunk = false;
     stopMsgPolling();
     cancelStickerArtifactPull();
     m_stickerPullQueue.clear();
@@ -567,9 +638,13 @@ void ChatMainWidget::handleServerJson(const QJsonObject &obj)
         handleFileOfferDelivered(obj);
     } else if (t == QStringLiteral("file_offer_ok")) {
         m_pendingOfferTransferId = jsonInt64Member(obj, QStringLiteral("transfer_id"));
-        m_offerChunkPlainMax = obj.value(QStringLiteral("chunk_plain_max")).toInt(65536);
-        if (m_offerChunkPlainMax < 4096) {
-            m_offerChunkPlainMax = 65536;
+        const int jsonMax = obj.value(QStringLiteral("chunk_plain_max")).toInt(65536);
+        m_offerChunkPlainMax = jsonMax >= 4096 ? jsonMax : 65536;
+        if (m_useBinaryFileChunk && obj.value(QStringLiteral("file_chunk_binary")).toBool()) {
+            const int bx = obj.value(QStringLiteral("chunk_plain_max_binary")).toInt(0);
+            if (bx > 4096) {
+                m_offerChunkPlainMax = bx;
+            }
         }
         m_fileSendGateReady = false;
         if (m_outgoingFileOfferBubble) {
@@ -2610,6 +2685,20 @@ void ChatMainWidget::onFileSendTick()
         return;
     }
     const QByteArray chunk = m_outgoingFile->read(m_offerChunkPlainMax);
+    if (m_useBinaryFileChunk && !chunk.isEmpty()) {
+        const QByteArray raw =
+            buildLnCbSenderChunkFrame(m_pendingOfferTransferId, m_outgoingSeq++, m_sessionToken, chunk);
+        if (raw.isEmpty()) {
+            m_fileSendTimer->stop();
+            m_outgoingFile.reset();
+            QMessageBox::warning(this, QStringLiteral("发送文件"),
+                                 QStringLiteral("二进制分片封装失败（token 长度须为 64 位 hex）"));
+            resetFileSendState();
+            return;
+        }
+        m_sessionClient->sendRawPayload(raw);
+        return;
+    }
     if (chunk.isEmpty()) {
         if (m_outgoingFile->atEnd()) {
             if (m_pendingOfferTransferId > 0 && !m_pendingOfferPath.isEmpty()) {
@@ -2655,6 +2744,43 @@ void ChatMainWidget::handleFileIncoming(const QJsonObject &obj)
         return;
     }
     appendIncomingFileOfferRow(obj);
+}
+
+void ChatMainWidget::handleBinaryPayload(const QByteArray &payload)
+{
+    if (payload.size() < 24) {
+        return;
+    }
+    if (std::memcmp(payload.constData(), "LNCB", 4) != 0) {
+        return;
+    }
+    const quint16 kind = readU16Be(payload.constData() + 6);
+    if (kind != 1) {
+        return;
+    }
+    const qint64 tid = readI64Be(payload.constData() + 8);
+    if (tid != m_recvTransferId || !m_recvFile || !m_recvHash) {
+        return;
+    }
+    const quint32 plen = readU32Be(payload.constData() + 20);
+    if (payload.size() != 24 + int(plen)) {
+        return;
+    }
+    const QByteArray raw = payload.mid(24, int(plen));
+    if (raw.isEmpty() && plen > 0) {
+        cleanupFileReceive(false);
+        QMessageBox::warning(this, QStringLiteral("接收文件"), QStringLiteral("分片数据无效，已中止"));
+        m_recvTransferId = 0;
+        return;
+    }
+    if (m_recvFile->write(raw) != raw.size()) {
+        cleanupFileReceive(false);
+        QMessageBox::warning(this, QStringLiteral("接收文件"), QStringLiteral("写入失败，已中止"));
+        m_recvTransferId = 0;
+        return;
+    }
+    m_recvHash->addData(raw);
+    m_recvWritten += raw.size();
 }
 
 void ChatMainWidget::handleFileChunkPush(const QJsonObject &obj)

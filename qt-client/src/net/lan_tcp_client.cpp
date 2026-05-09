@@ -71,6 +71,20 @@ void LanTcpClient::sendJsonObject(const QJsonObject &obj)
     socket_.write(frame);
 }
 
+void LanTcpClient::sendRawPayload(const QByteArray &payload)
+{
+    if (!isConnected()) {
+        emit protocolError(QStringLiteral("未连接"));
+        return;
+    }
+    const QByteArray frame = encodeFrame(payload);
+    if (frame.isEmpty()) {
+        emit protocolError(QStringLiteral("负载过大"));
+        return;
+    }
+    socket_.write(frame);
+}
+
 void LanTcpClient::onReadyRead()
 {
     rxBuf_.append(socket_.readAll());
@@ -97,6 +111,10 @@ void LanTcpClient::tryExtractFrames()
         const QByteArray payload = rxBuf_.mid(4, static_cast<int>(len));
         rxBuf_.remove(0, 4 + static_cast<int>(len));
 
+        if (payload.size() >= 4 && std::memcmp(payload.constData(), "LNCB", 4) == 0) {
+            emit binaryPayloadReceived(payload);
+            continue;
+        }
         QJsonParseError pe{};
         const QJsonDocument doc = QJsonDocument::fromJson(payload, &pe);
         if (!doc.isObject()) {

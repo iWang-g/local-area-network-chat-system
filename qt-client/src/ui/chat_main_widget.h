@@ -2,6 +2,7 @@
 #define CHAT_MAIN_WIDGET_H
 
 #include <QCryptographicHash>
+#include <QByteArray>
 #include <QFile>
 #include <QHash>
 #include <QPointer>
@@ -40,11 +41,14 @@ class ChatMainWidget : public QWidget
 public:
     explicit ChatMainWidget(QWidget *parent = nullptr);
     void setUserEmail(const QString &email);
-    void setSession(LanTcpClient *client, const QString &token, qint64 userId);
+    void setSession(LanTcpClient *client, const QString &token, qint64 userId, bool fileChunkBinary = false,
+                    int chunkPlainMaxBinary = 0);
     void clearSession();
     QString userEmail() const { return m_userEmail; }
     /// 登录后主窗口转发的 TCP 业务 JSON（好友等）。
     void handleServerJson(const QJsonObject &obj);
+    /// LNCB 二进制帧（如 `file_chunk_push`）。
+    void handleBinaryPayload(const QByteArray &payload);
 
 signals:
     void logoutRequested();
@@ -203,6 +207,7 @@ private:
     QHash<qint64, QJsonObject> m_incomingFileOfferParamsByTid;
     QHash<qint64, QPointer<QWidget>> m_incomingFileOfferBubbleByTid;
     int m_offerChunkPlainMax = 65536;
+    bool m_useBinaryFileChunk = false;
     bool m_fileSendGateReady = false;
     std::unique_ptr<QFile> m_outgoingFile;
     quint32 m_outgoingSeq = 0;

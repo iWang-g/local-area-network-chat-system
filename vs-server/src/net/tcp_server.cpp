@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <cstdint>
 #include <fstream>
 #include <mutex>
@@ -202,6 +203,7 @@ void handleClient(SOCKET client, std::atomic<std::uint64_t> &connId)
     char buf[8192];
     bool helloOk = false;
     std::optional<std::int64_t> authedUser;
+    bool connFileChunkBinaryCapable = false;
 
     for (;;) {
         const int n = ::recv(client, buf, static_cast<int>(sizeof(buf)), 0);
@@ -211,6 +213,58 @@ void handleClient(SOCKET client, std::atomic<std::uint64_t> &connId)
         asm_.append(buf, static_cast<size_t>(n));
         std::string json;
         while (asm_.nextFrame(json)) {
+            if (json.size() >= 4 && std::memcmp(json.data(), kLnCbMagic, 4) == 0) {
+                if (!helloOk) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrNeedHandshake, "请先完成握手")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                if (!authedUser.has_value()) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrNeedToken, "请先登录")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                LnCbSenderChunkParse p;
+                std::string perr;
+                if (!parseLnCbSenderChunkPayload(json, p, perr)) {
+                    const std::string msg = perr.empty() ? std::string("非法的二进制分片") : perr;
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrInvalidInput, msg)))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                std::int64_t tokUid = 0;
+                if (!AppDatabase::validateToken(p.tokenHex64, tokUid) || tokUid != *authedUser) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrNeedToken, "请先登录")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                const FileChunkRelayResult cr =
+                    fileRelayOnSenderChunkPlain(tokUid, p.transferId, p.seq, p.plain);
+                if (!cr.ok) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(cr.errCode, cr.message)))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                try {
+                    if (cr.pushToUserId > 0) {
+                        if (!cr.pushBinaryPayload.empty()) {
+                            pushFrameToUser(cr.pushToUserId, encodeFrame(cr.pushBinaryPayload));
+                        } else if (!cr.pushJsonUtf8.empty()) {
+                            pushFrameToUser(cr.pushToUserId, encodeFrame(cr.pushJsonUtf8));
+                        }
+                    }
+                } catch (const std::length_error &) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrFileChunk, "分片帧过大")))) {
+                        goto end;
+                    }
+                }
+                continue;
+            }
             const auto t = parseMessageType(json);
             if (!t) {
                 VSLOG_WARN("[conn " + std::to_string(id) + "] drop frame (no type)");
@@ -221,7 +275,8 @@ void handleClient(SOCKET client, std::atomic<std::uint64_t> &connId)
                 if (validateHello(json, err)) {
                     VSLOG_INFO("[conn " + std::to_string(id) + "] hello ok");
                     helloOk = true;
-                    if (!sendAll(client, encodeFrame(R"({"type":"hello_ok","version":1})"))) {
+                    connFileChunkBinaryCapable = json.find("file_chunk_binary_v1") != std::string::npos;
+                    if (!sendAll(client, encodeFrame(buildHelloOkJson(connFileChunkBinaryCapable)))) {
                         goto end;
                     }
                 } else {
@@ -855,10 +910,12 @@ void handleClient(SOCKET client, std::atomic<std::uint64_t> &connId)
                 }
                 const std::uint64_t fsz = static_cast<std::uint64_t>(*szOpt);
                 const bool asSticker = (json.find("\"as_sticker\":true") != std::string::npos);
+                const std::optional<std::uint32_t> offerChunkBinaryMax =
+                    connFileChunkBinaryCapable ? std::make_optional(kFileChunkBinaryPlainMax) : std::nullopt;
                 if (!peerHasOnlineSession(*peerOpt)) {
                     if (fsz > 0 && fsz <= kFileTransferMaxBytes) {
-                        const FileOfferResult fo =
-                            fileRelayOfferServerBufferPeerOffline(selfUid, *peerOpt, *fnOpt, fsz, sha, asSticker);
+                        const FileOfferResult fo = fileRelayOfferServerBufferPeerOffline(
+                            selfUid, *peerOpt, *fnOpt, fsz, sha, asSticker, offerChunkBinaryMax);
                         if (!fo.ok) {
                             if (!sendAll(client, encodeFrame(buildErrorJson(fo.errCode, fo.message)))) {
                                 goto end;
@@ -879,7 +936,8 @@ void handleClient(SOCKET client, std::atomic<std::uint64_t> &connId)
                     }
                     continue;
                 }
-                const FileOfferResult fo = fileRelayOffer(selfUid, *peerOpt, *fnOpt, fsz, std::move(sha), asSticker);
+                const FileOfferResult fo =
+                    fileRelayOffer(selfUid, *peerOpt, *fnOpt, fsz, std::move(sha), asSticker, offerChunkBinaryMax);
                 if (!fo.ok) {
                     if (!sendAll(client, encodeFrame(buildErrorJson(fo.errCode, fo.message)))) {
                         goto end;
@@ -984,8 +1042,12 @@ void handleClient(SOCKET client, std::atomic<std::uint64_t> &connId)
                     continue;
                 }
                 try {
-                    if (cr.pushToUserId > 0 && !cr.pushJsonUtf8.empty()) {
-                        pushFrameToUser(cr.pushToUserId, encodeFrame(cr.pushJsonUtf8));
+                    if (cr.pushToUserId > 0) {
+                        if (!cr.pushBinaryPayload.empty()) {
+                            pushFrameToUser(cr.pushToUserId, encodeFrame(cr.pushBinaryPayload));
+                        } else if (!cr.pushJsonUtf8.empty()) {
+                            pushFrameToUser(cr.pushToUserId, encodeFrame(cr.pushJsonUtf8));
+                        }
                     }
                 } catch (const std::length_error &) {
                     if (!sendAll(client, encodeFrame(buildErrorJson(kErrFileChunk, "分片帧过大")))) {
