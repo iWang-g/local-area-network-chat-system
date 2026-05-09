@@ -1,19 +1,13 @@
 #include "vsserver/file_relay.hpp"
 
+#include "vsserver/base64.hpp"
 #include "vsserver/database.hpp"
 #include "vsserver/logger.hpp"
 #include "vsserver/message_parse.hpp"
+#include "vsserver/platform_paths.hpp"
 #include "vsserver/protocol.hpp"
 
 #include "picosha2.h"
-
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <Windows.h>
-#include <Wincrypt.h>
-
-#pragma comment(lib, "crypt32.lib")
 
 #include <algorithm>
 #include <cctype>
@@ -96,36 +90,12 @@ static std::string sanitizeFileName(std::string s)
 
 static bool base64DecodeSize(const std::string &b64, std::size_t &outDecodedSize)
 {
-    if (b64.empty()) {
-        return false;
-    }
-    DWORD nbytes = 0;
-    if (!::CryptStringToBinaryA(b64.c_str(), static_cast<DWORD>(b64.size()),
-                                CRYPT_STRING_BASE64 | CRYPT_STRING_STRICT, nullptr, &nbytes, nullptr, nullptr)) {
-        return false;
-    }
-    outDecodedSize = static_cast<std::size_t>(nbytes);
-    return true;
-}
-
-static std::wstring exeDirectoryW()
-{
-    wchar_t buf[MAX_PATH]{};
-    const DWORD n = ::GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    if (n == 0) {
-        return L".";
-    }
-    std::wstring p(buf, n);
-    const auto pos = p.find_last_of(L"\\/");
-    if (pos == std::wstring::npos) {
-        return L".";
-    }
-    return p.substr(0, pos);
+    return wireBase64DecodedByteCount(b64, outDecodedSize);
 }
 
 static std::filesystem::path offlinePartialFsPath(const std::int64_t transferId)
 {
-    const std::filesystem::path root = std::filesystem::path(exeDirectoryW()) / L"data" / L"offline_partial";
+    const std::filesystem::path root = appExecutableDirectory() / "data" / "offline_partial";
     (void)std::filesystem::create_directories(root);
     return root / (std::to_string(transferId) + std::string(".part"));
 }
@@ -149,7 +119,7 @@ static std::filesystem::path relayArtifactFsPath(const std::int64_t transferId, 
             ext = "bin";
         }
     }
-    const std::filesystem::path root = std::filesystem::path(exeDirectoryW()) / L"data" / L"sticker_cache";
+    const std::filesystem::path root = appExecutableDirectory() / "data" / "sticker_cache";
     (void)std::filesystem::create_directories(root);
     return root / (std::to_string(transferId) + std::string(".") + ext);
 }
@@ -509,21 +479,18 @@ FileChunkRelayResult fileRelayOnSenderChunk(const std::int64_t selfUserId, const
                 return r;
             }
         }
-        std::string plain;
-        plain.resize(decSz);
-        DWORD nb = static_cast<DWORD>(decSz);
-        if (!::CryptStringToBinaryA(dataB64Utf8.c_str(), static_cast<DWORD>(dataB64Utf8.size()),
-                                    CRYPT_STRING_BASE64 | CRYPT_STRING_STRICT,
-                                    reinterpret_cast<BYTE *>(plain.data()), &nb, nullptr, nullptr)) {
+        std::vector<std::uint8_t> plainBin;
+        if (!wireBase64DecodeBytes(dataB64Utf8, plainBin)) {
             r.errCode = kErrFileChunk;
             r.message = "分片解码失败";
             return r;
         }
-        if (nb != static_cast<DWORD>(decSz)) {
+        if (plainBin.size() != decSz) {
             r.errCode = kErrFileChunk;
             r.message = "解码长度不一致";
             return r;
         }
+        std::string plain(reinterpret_cast<const char *>(plainBin.data()), plainBin.size());
         t.serverChunkOut->write(plain.data(), static_cast<std::streamsize>(decSz));
         if (!t.serverChunkOut->good()) {
             r.errCode = kErrFileChunk;

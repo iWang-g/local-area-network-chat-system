@@ -2,15 +2,10 @@
 #include "vsserver/file_relay.hpp"
 #include "vsserver/logger.hpp"
 #include "vsserver/message_parse.hpp"
+#include "vsserver/net_compat.hpp"
 #include "vsserver/protocol.hpp"
 #include "vsserver/tcp_server.hpp"
 #include "vsserver/wire.hpp"
-
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <WinSock2.h>
-#include <WS2tcpip.h>
 
 #include <algorithm>
 #include <atomic>
@@ -24,15 +19,13 @@
 #include <unordered_map>
 #include <vector>
 
-#pragma comment(lib, "Ws2_32.lib")
-
 namespace vsserver {
 
 namespace {
 
 std::mutex g_sendAllMutex;
 std::mutex g_onlineMutex;
-std::unordered_map<std::int64_t, std::vector<SOCKET>> g_onlineByUser;
+std::unordered_map<std::int64_t, std::vector<SockHandle>> g_onlineByUser;
 
 bool peerHasOnlineSession(const std::int64_t userId)
 {
@@ -43,13 +36,13 @@ bool peerHasOnlineSession(const std::int64_t userId)
 
 void pushFrameToUser(std::int64_t userId, const std::string &frame);
 
-bool sendAllUnsafe(SOCKET s, const std::string &data)
+bool sendAllUnsafe(SockHandle s, const std::string &data)
 {
     const char *p = data.data();
     size_t left = data.size();
     while (left > 0) {
         const int n = ::send(s, p, static_cast<int>(left), 0);
-        if (n == SOCKET_ERROR || n == 0) {
+        if (sendFailed(n)) {
             return false;
         }
         left -= static_cast<size_t>(n);
@@ -58,7 +51,7 @@ bool sendAllUnsafe(SOCKET s, const std::string &data)
     return true;
 }
 
-bool sendAll(SOCKET s, const std::string &data)
+bool sendAll(SockHandle s, const std::string &data)
 {
     std::lock_guard<std::mutex> lk(g_sendAllMutex);
     return sendAllUnsafe(s, data);
@@ -67,7 +60,7 @@ bool sendAll(SOCKET s, const std::string &data)
 void notifyFriendsPresenceChanged(const std::int64_t subjectUserId, bool online);
 void notifyFriendsNicknameChanged(const std::int64_t subjectUserId, const std::string &nicknameUtf8);
 
-void onlineRegister(const std::int64_t userId, SOCKET sock)
+void onlineRegister(const std::int64_t userId, SockHandle sock)
 {
     bool becameOnline = false;
     {
@@ -84,7 +77,7 @@ void onlineRegister(const std::int64_t userId, SOCKET sock)
     }
 }
 
-void onlineUnregister(const std::int64_t userId, SOCKET sock)
+void onlineUnregister(const std::int64_t userId, SockHandle sock)
 {
     bool becameOffline = false;
     {
@@ -146,7 +139,7 @@ void notifyFriendsAvatarChanged(const std::int64_t subjectUserId, const std::int
 
 void pushFrameToUser(const std::int64_t userId, const std::string &frame)
 {
-    std::vector<SOCKET> copy;
+    std::vector<SockHandle> copy;
     {
         std::lock_guard<std::mutex> lk(g_onlineMutex);
         const auto it = g_onlineByUser.find(userId);
@@ -154,7 +147,7 @@ void pushFrameToUser(const std::int64_t userId, const std::string &frame)
             copy = it->second;
         }
     }
-    for (SOCKET s : copy) {
+    for (SockHandle s : copy) {
         if (!sendAll(s, frame)) {
             VSLOG_WARN("msg_push send failed");
         }
@@ -164,7 +157,7 @@ void pushFrameToUser(const std::int64_t userId, const std::string &frame)
 enum class AuthRc { IoErr, ContinueLoop, Ok };
 
 /// 好友等业务：`hello` 后须有效 `token`。
-AuthRc requireFriendAuth(SOCKET client, bool helloOk, const std::string &json, std::int64_t &outUserId)
+AuthRc requireFriendAuth(SockHandle client, bool helloOk, const std::string &json, std::int64_t &outUserId)
 {
     if (!helloOk) {
         if (!sendAll(client, encodeFrame(buildErrorJson(kErrNeedHandshake, "请先完成握手")))) {
@@ -194,7 +187,7 @@ AuthRc requireFriendAuth(SOCKET client, bool helloOk, const std::string &json, s
     return AuthRc::Ok;
 }
 
-void handleClient(SOCKET client, std::atomic<std::uint64_t> &connId)
+void handleClient(SockHandle client, std::atomic<std::uint64_t> &connId)
 {
     const std::uint64_t id = ++connId;
     VSLOG_INFO("[conn " + std::to_string(id) + "] opened");
@@ -207,7 +200,7 @@ void handleClient(SOCKET client, std::atomic<std::uint64_t> &connId)
 
     for (;;) {
         const int n = ::recv(client, buf, static_cast<int>(sizeof(buf)), 0);
-        if (n == SOCKET_ERROR || n == 0) {
+        if (recvWouldStop(n)) {
             break;
         }
         asm_.append(buf, static_cast<size_t>(n));
@@ -1210,7 +1203,7 @@ end:
             }
         }
     }
-    ::closesocket(client);
+    sockClose(client);
     VSLOG_INFO("[conn " + std::to_string(id) + "] closed");
 }
 
@@ -1218,21 +1211,23 @@ end:
 
 int runTcpServer(std::uint16_t port)
 {
-    SOCKET listenSock = INVALID_SOCKET;
-    WSADATA wsaData{};
-    if (::WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+    if (!sockStartup()) {
+#ifdef _WIN32
         VSLOG_ERROR("WSAStartup failed");
+#else
+        VSLOG_ERROR("socket subsystem init failed");
+#endif
         return 1;
     }
 
-    listenSock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (listenSock == INVALID_SOCKET) {
+    SockHandle listenSock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sockIsInvalid(listenSock)) {
         VSLOG_ERROR("socket failed");
-        ::WSACleanup();
+        sockCleanup();
         return 1;
     }
 
-    BOOL opt = TRUE;
+    int opt = 1;
     ::setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&opt), sizeof(opt));
 
     sockaddr_in addr{};
@@ -1240,16 +1235,16 @@ int runTcpServer(std::uint16_t port)
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
 
-    if (::bind(listenSock, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == SOCKET_ERROR) {
+    if (::bind(listenSock, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
         VSLOG_ERROR("bind failed (port in use?)");
-        ::closesocket(listenSock);
-        ::WSACleanup();
+        sockClose(listenSock);
+        sockCleanup();
         return 1;
     }
-    if (::listen(listenSock, SOMAXCONN) == SOCKET_ERROR) {
+    if (::listen(listenSock, SOMAXCONN) != 0) {
         VSLOG_ERROR("listen failed");
-        ::closesocket(listenSock);
-        ::WSACleanup();
+        sockClose(listenSock);
+        sockCleanup();
         return 1;
     }
 
@@ -1259,16 +1254,16 @@ int runTcpServer(std::uint16_t port)
     std::atomic<std::uint64_t> connCounter{0};
 
     for (;;) {
-        SOCKET client = ::accept(listenSock, nullptr, nullptr);
-        if (client == INVALID_SOCKET) {
+        SockHandle client = ::accept(listenSock, nullptr, nullptr);
+        if (sockIsInvalid(client)) {
             VSLOG_ERROR("accept failed");
             break;
         }
         std::thread(handleClient, client, std::ref(connCounter)).detach();
     }
 
-    ::closesocket(listenSock);
-    ::WSACleanup();
+    sockClose(listenSock);
+    sockCleanup();
     return 0;
 }
 

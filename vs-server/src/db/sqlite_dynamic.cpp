@@ -1,9 +1,13 @@
 #include "vsserver/sqlite_dynamic.hpp"
 
+#ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
+#else
+#include <sqlite3.h>
+#endif
 
 #include <cstdint>
 #include <cstring>
@@ -16,6 +20,7 @@ namespace {
 std::mutex g_sqliteOnce;
 std::unique_ptr<SqliteDynamic> g_inst;
 
+#ifdef _WIN32
 std::wstring exeDirectory()
 {
     wchar_t buf[MAX_PATH]{};
@@ -30,6 +35,7 @@ std::wstring exeDirectory()
     }
     return p.substr(0, pos);
 }
+#endif
 
 } // namespace
 
@@ -54,6 +60,7 @@ SqliteDynamic::~SqliteDynamic()
 
 bool SqliteDynamic::loadDll()
 {
+#ifdef _WIN32
     const std::wstring nearExe = exeDirectory() + L"\\sqlite3.dll";
     m_dll = ::LoadLibraryW(nearExe.c_str());
     if (m_dll == nullptr) {
@@ -98,14 +105,39 @@ bool SqliteDynamic::loadDll()
 
     m_ok = true;
     return true;
+#else
+    m_dll = nullptr;
+    p_open = &::sqlite3_open;
+    p_close = &::sqlite3_close;
+    p_exec = &::sqlite3_exec;
+    p_prepare_v2 = &::sqlite3_prepare_v2;
+    p_step = &::sqlite3_step;
+    p_finalize = &::sqlite3_finalize;
+    p_reset = &::sqlite3_reset;
+    p_bind_text = &::sqlite3_bind_text;
+    p_bind_blob = &::sqlite3_bind_blob;
+    p_column_text = &::sqlite3_column_text;
+    p_column_int64 = &::sqlite3_column_int64;
+    p_column_blob = &::sqlite3_column_blob;
+    p_column_bytes = &::sqlite3_column_bytes;
+    p_free = &::sqlite3_free;
+    p_errmsg = &::sqlite3_errmsg;
+    p_last_insert_rowid = &::sqlite3_last_insert_rowid;
+    p_changes = &::sqlite3_changes;
+    m_ok = true;
+    m_err.clear();
+    return true;
+#endif
 }
 
 void SqliteDynamic::unload()
 {
+#ifdef _WIN32
     if (m_dll != nullptr) {
         ::FreeLibrary(static_cast<HMODULE>(m_dll));
         m_dll = nullptr;
     }
+#endif
     m_ok = false;
     p_open = nullptr;
     p_close = nullptr;

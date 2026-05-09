@@ -1,6 +1,7 @@
 #include "vsserver/mail_helper_http.hpp"
 #include "vsserver/message_parse.hpp"
 
+#ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -80,8 +81,7 @@ bool mailHelperNotifyRegisterCode(const std::string &email, const std::string &c
 
     INTERNET_PORT port = uc.nPort;
     if (port == 0) {
-        port = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? INTERNET_DEFAULT_HTTPS_PORT
-                                                     : INTERNET_DEFAULT_HTTP_PORT;
+        port = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT;
     }
 
     const HINTERNET hSession =
@@ -193,3 +193,109 @@ bool mailHelperNotifyRegisterCode(const std::string &email, const std::string &c
 }
 
 } // namespace vsserver
+
+#else
+
+#include <curl/curl.h>
+
+#include <cstdlib>
+#include <mutex>
+#include <optional>
+#include <string>
+
+namespace vsserver {
+
+namespace {
+
+std::optional<std::string> dupEnv(const char *name)
+{
+    const char *v = std::getenv(name);
+    if (v == nullptr || v[0] == '\0') {
+        return std::nullopt;
+    }
+    return std::string(v);
+}
+
+std::once_flag g_curlOnce;
+
+void curlGlobalInitOnce()
+{
+    std::call_once(g_curlOnce, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
+}
+
+static size_t curlDiscardWrite(char *ptr, size_t size, size_t nmemb, void *userdata)
+{
+    (void)ptr;
+    (void)userdata;
+    return size * nmemb;
+}
+
+} // namespace
+
+bool mailHelperConfigured()
+{
+    const auto u = dupEnv("LANCS_MAIL_HELPER_URL");
+    return u.has_value();
+}
+
+bool mailHelperNotifyRegisterCode(const std::string &email, const std::string &code, std::string &errOut)
+{
+    const auto urlOpt = dupEnv("LANCS_MAIL_HELPER_URL");
+    if (!urlOpt.has_value()) {
+        return true;
+    }
+    const std::string &urlUtf8 = *urlOpt;
+    const auto secretOpt = dupEnv("LANCS_MAIL_HELPER_SECRET");
+
+    const std::string body = std::string(R"({"email":")") + jsonEscapeString(email) + R"(","code":")"
+                             + jsonEscapeString(code) + R"(","purpose":"register"})";
+
+    curlGlobalInitOnce();
+
+    CURL *curl = curl_easy_init();
+    if (curl == nullptr) {
+        errOut = "curl_easy_init 失败";
+        return false;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, urlUtf8.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlDiscardWrite);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
+
+    struct curl_slist *hdr = nullptr;
+    hdr = curl_slist_append(hdr, "Content-Type: application/json; charset=utf-8");
+    std::string bearerHdrStorage;
+    if (secretOpt.has_value()) {
+        bearerHdrStorage = std::string("Authorization: Bearer ") + *secretOpt;
+        hdr = curl_slist_append(hdr, bearerHdrStorage.c_str());
+    }
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr);
+
+    const CURLcode perf = curl_easy_perform(curl);
+    long httpCode = 0;
+    if (perf == CURLE_OK) {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+    }
+
+    curl_slist_free_all(hdr);
+    curl_easy_cleanup(curl);
+
+    if (perf != CURLE_OK) {
+        errOut = std::string("curl: ") + curl_easy_strerror(perf);
+        return false;
+    }
+    if (httpCode < 200 || httpCode > 299) {
+        errOut = "mail-helper 返回 HTTP " + std::to_string(httpCode);
+        return false;
+    }
+    return true;
+}
+
+} // namespace vsserver
+
+#endif

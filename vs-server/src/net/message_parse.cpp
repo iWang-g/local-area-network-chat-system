@@ -1,13 +1,6 @@
 #include "vsserver/message_parse.hpp"
 #include "vsserver/protocol.hpp"
-
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <Windows.h>
-#include <Wincrypt.h>
-
-#pragma comment(lib, "crypt32.lib")
+#include "vsserver/base64.hpp"
 
 #include <cstring>
 #include <regex>
@@ -106,48 +99,12 @@ std::string buildErrorJson(int code, const std::string &messageUtf8, int retryAf
 
 bool wireBase64Encode(const std::uint8_t *data, const std::size_t len, std::string &outB64Utf8)
 {
-    outB64Utf8.clear();
-    if (data == nullptr || len == 0) {
-        return false;
-    }
-    DWORD cch = 0;
-    if (!::CryptBinaryToStringA(reinterpret_cast<const BYTE *>(data), static_cast<DWORD>(len),
-                                CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &cch)) {
-        return false;
-    }
-    outB64Utf8.assign(static_cast<std::size_t>(cch), '\0');
-    if (!::CryptBinaryToStringA(reinterpret_cast<const BYTE *>(data), static_cast<DWORD>(len),
-                                CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, reinterpret_cast<LPSTR>(outB64Utf8.data()),
-                                &cch)) {
-        outB64Utf8.clear();
-        return false;
-    }
-    while (!outB64Utf8.empty() && (outB64Utf8.back() == '\0' || outB64Utf8.back() == '\r' || outB64Utf8.back() == '\n')) {
-        outB64Utf8.pop_back();
-    }
-    return !outB64Utf8.empty();
+    return wireBase64EncodeBytes(data, len, outB64Utf8);
 }
 
 bool wireBase64Decode(const std::string &b64Utf8, std::vector<std::uint8_t> &outBytes)
 {
-    outBytes.clear();
-    if (b64Utf8.empty()) {
-        return false;
-    }
-    DWORD nbytes = 0;
-    if (!::CryptStringToBinaryA(b64Utf8.c_str(), static_cast<DWORD>(b64Utf8.size()),
-                                CRYPT_STRING_BASE64 | CRYPT_STRING_STRICT, nullptr, &nbytes, nullptr, nullptr)) {
-        return false;
-    }
-    outBytes.resize(static_cast<std::size_t>(nbytes));
-    if (!::CryptStringToBinaryA(b64Utf8.c_str(), static_cast<DWORD>(b64Utf8.size()),
-                                CRYPT_STRING_BASE64 | CRYPT_STRING_STRICT,
-                                reinterpret_cast<BYTE *>(outBytes.data()), &nbytes, nullptr, nullptr)) {
-        outBytes.clear();
-        return false;
-    }
-    outBytes.resize(static_cast<std::size_t>(nbytes));
-    return true;
+    return wireBase64DecodeBytes(b64Utf8, outBytes);
 }
 
 std::string buildAuthOkJson(const std::int64_t userId, const std::string &tokenHex, const std::string &emailUtf8,

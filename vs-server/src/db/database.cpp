@@ -2,13 +2,9 @@
 #include "vsserver/logger.hpp"
 #include "vsserver/mail_helper_http.hpp"
 #include "vsserver/password_hash.hpp"
+#include "vsserver/platform_paths.hpp"
 #include "vsserver/protocol.hpp"
 #include "vsserver/sqlite_dynamic.hpp"
-
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <Windows.h>
 
 #include <algorithm>
 #include <cctype>
@@ -16,6 +12,7 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <mutex>
 #include <string_view>
 #include <unordered_map>
@@ -37,42 +34,12 @@ constexpr const char *kPurposeRegister = "register";
 
 std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_lastRegisterCodeSent;
 
-std::wstring exeDirectoryW()
+static bool ensureDataDirectoryFs(const std::filesystem::path &exeDir)
 {
-    wchar_t buf[MAX_PATH]{};
-    const DWORD n = ::GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    if (n == 0) {
-        return L".";
-    }
-    std::wstring p(buf, n);
-    const auto pos = p.find_last_of(L"\\/");
-    if (pos == std::wstring::npos) {
-        return L".";
-    }
-    return p.substr(0, pos);
-}
-
-std::string wideToUtf8(const std::wstring &w)
-{
-    if (w.empty()) {
-        return {};
-    }
-    const int n = ::WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (n <= 1) {
-        return {};
-    }
-    std::string out(static_cast<std::size_t>(n - 1), '\0');
-    ::WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, out.data(), n, nullptr, nullptr);
-    return out;
-}
-
-bool ensureDataDirectory(const std::wstring &exeDir)
-{
-    const std::wstring dataDir = exeDir + L"\\data";
-    if (::CreateDirectoryW(dataDir.c_str(), nullptr)) {
-        return true;
-    }
-    return ::GetLastError() == ERROR_ALREADY_EXISTS;
+    const std::filesystem::path dataDir = exeDir / "data";
+    std::error_code ec;
+    std::filesystem::create_directories(dataDir, ec);
+    return !ec && std::filesystem::is_directory(dataDir);
 }
 
 static AuthResult fail(AuthErrorCode c, const std::string &msg)
@@ -413,12 +380,12 @@ bool AppDatabase::initialize(std::string &errMsg)
         return false;
     }
 
-    const std::wstring exe = exeDirectoryW();
-    if (!ensureDataDirectory(exe)) {
+    const std::filesystem::path exe = appExecutableDirectory();
+    if (!ensureDataDirectoryFs(exe)) {
         errMsg = "无法创建 data 目录";
         return false;
     }
-    const std::string path = wideToUtf8(exe + L"\\data\\chat.db");
+    const std::string path = (exe / "data" / "chat.db").u8string();
 
     char *err = nullptr;
     const int rc = api.open(path.c_str(), &g_db);

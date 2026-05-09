@@ -67,6 +67,7 @@ CMakeLists.txt.user*
 
 # vs-server 本地构建与 IDE 缓存
 vs-server/.vs/
+vs-server/build/
 vs-server/x64/
 vs-server/vs-server/x64/
 vs-server/**/[Dd]ebug/

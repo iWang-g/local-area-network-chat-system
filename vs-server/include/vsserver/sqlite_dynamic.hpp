@@ -9,7 +9,7 @@ struct sqlite3_stmt;
 
 namespace vsserver {
 
-/// 运行时加载同目录下 sqlite3.dll（官方预编译 x64 包），失败则数据库不可用。
+/// Windows：运行时加载同目录 sqlite3.dll；Unix：链接 libsqlite3，直接使用符号。
 class SqliteDynamic {
 public:
     SqliteDynamic();
