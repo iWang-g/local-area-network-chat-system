@@ -40,6 +40,10 @@ Thumbs.db
 *.qbs.user*
 CMakeLists.txt.user*
 
+# Qt 客户端本机 CMake 构建目录（套件名各异，统一忽略 build/）
+qt-client/build/
+qt-client/**/.qtc_clangd/
+
 # xemacs temporary files
 *.flc
 
