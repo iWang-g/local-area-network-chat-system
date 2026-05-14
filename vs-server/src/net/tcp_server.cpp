@@ -876,6 +876,225 @@ void handleClient(SockHandle client, std::atomic<std::uint64_t> &connId)
                     goto end;
                 }
                 pushFrameToUser(*peerOpt, encodeFrame(buildMsgConvClearedJson(selfUid)));
+            } else if (*t == "group_create") {
+                std::int64_t selfUid = 0;
+                const AuthRc ar = requireFriendAuth(client, helloOk, json, selfUid);
+                if (ar == AuthRc::IoErr) {
+                    goto end;
+                }
+                if (ar == AuthRc::ContinueLoop) {
+                    continue;
+                }
+                const auto nameOpt = parseJsonStringField(json, "name");
+                const auto memberIdsOpt = parseJsonInt64ArrayField(json, "member_user_ids");
+                if (!nameOpt) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrInvalidInput, "缺少 name")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                const std::vector<std::int64_t> memberIds = memberIdsOpt.value_or(std::vector<std::int64_t>());
+                const AppDatabase::GroupOpOutcome go = AppDatabase::groupCreate(selfUid, *nameOpt, memberIds);
+                if (!go.ok) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(go.errCode, go.message)))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                std::vector<AppDatabase::GroupMemberRow> members;
+                (void)AppDatabase::groupMembers(selfUid, go.groupId, members);
+                if (!sendAll(client, encodeFrame(buildGroupCreateOkJson(go.groupId, *nameOpt, selfUid,
+                                                                        static_cast<std::int64_t>(members.size()))))) {
+                    goto end;
+                }
+            } else if (*t == "group_list") {
+                std::int64_t selfUid = 0;
+                const AuthRc ar = requireFriendAuth(client, helloOk, json, selfUid);
+                if (ar == AuthRc::IoErr) {
+                    goto end;
+                }
+                if (ar == AuthRc::ContinueLoop) {
+                    continue;
+                }
+                std::vector<AppDatabase::GroupListRow> rows;
+                const AppDatabase::GroupOpOutcome go = AppDatabase::groupList(selfUid, rows);
+                if (!go.ok) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(go.errCode, go.message)))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                std::vector<GroupListEntry> ents;
+                ents.reserve(rows.size());
+                for (const auto &r : rows) {
+                    GroupListEntry e;
+                    e.groupId = r.groupId;
+                    e.name = r.name;
+                    e.ownerUserId = r.ownerUserId;
+                    e.memberCount = r.memberCount;
+                    e.joinedAt = r.joinedAt;
+                    e.lastMessagePreview = r.lastMessageContent;
+                    e.lastMessageAt = r.lastMessageAt;
+                    e.lastMessageFromUserId = r.lastMessageFromUserId;
+                    e.lastMessageFromNickname = r.lastMessageFromNickname;
+                    ents.push_back(std::move(e));
+                }
+                if (!sendAll(client, encodeFrame(buildGroupListOkJson(ents)))) {
+                    goto end;
+                }
+            } else if (*t == "group_members") {
+                std::int64_t selfUid = 0;
+                const AuthRc ar = requireFriendAuth(client, helloOk, json, selfUid);
+                if (ar == AuthRc::IoErr) {
+                    goto end;
+                }
+                if (ar == AuthRc::ContinueLoop) {
+                    continue;
+                }
+                const auto groupOpt = parseJsonInt64Field(json, "group_id");
+                if (!groupOpt || *groupOpt <= 0) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrInvalidInput, "缺少 group_id")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                std::vector<AppDatabase::GroupMemberRow> rows;
+                const AppDatabase::GroupOpOutcome go = AppDatabase::groupMembers(selfUid, *groupOpt, rows);
+                if (!go.ok) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(go.errCode, go.message)))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                std::vector<GroupMemberEntry> ents;
+                ents.reserve(rows.size());
+                for (const auto &r : rows) {
+                    GroupMemberEntry e;
+                    e.userId = r.userId;
+                    e.email = r.email;
+                    e.nickname = r.nickname;
+                    e.role = r.role;
+                    e.joinedAt = r.joinedAt;
+                    ents.push_back(std::move(e));
+                }
+                if (!sendAll(client, encodeFrame(buildGroupMembersOkJson(*groupOpt, ents)))) {
+                    goto end;
+                }
+            } else if (*t == "group_msg_send") {
+                std::int64_t selfUid = 0;
+                const AuthRc ar = requireFriendAuth(client, helloOk, json, selfUid);
+                if (ar == AuthRc::IoErr) {
+                    goto end;
+                }
+                if (ar == AuthRc::ContinueLoop) {
+                    continue;
+                }
+                const auto groupOpt = parseJsonInt64Field(json, "group_id");
+                const auto textOpt = parseJsonStringField(json, "text");
+                if (!groupOpt || *groupOpt <= 0 || !textOpt) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrInvalidInput, "缺少 group_id 或 text")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                const AppDatabase::GroupOpOutcome go = AppDatabase::groupMessageSend(selfUid, *groupOpt, *textOpt);
+                if (!go.ok) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(go.errCode, go.message)))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                std::string fromEmail;
+                std::string fromNickname;
+                (void)AppDatabase::tryGetUserPublic(selfUid, fromEmail, fromNickname);
+                GroupChatMessageEntry e;
+                e.messageId = go.messageId;
+                e.groupId = *groupOpt;
+                e.fromUserId = selfUid;
+                e.fromNickname = fromNickname;
+                e.content = *textOpt;
+                e.createdAt = go.createdAt;
+                if (!sendAll(client, encodeFrame(buildGroupMsgSendOkJson(e)))) {
+                    goto end;
+                }
+                std::vector<std::int64_t> members;
+                const AppDatabase::GroupOpOutcome memGo = AppDatabase::groupMemberIds(selfUid, *groupOpt, members);
+                if (memGo.ok) {
+                    const std::string frame = encodeFrame(buildGroupMsgPushJson(e));
+                    for (const std::int64_t uid : members) {
+                        if (uid > 0 && uid != selfUid) {
+                            pushFrameToUser(uid, frame);
+                        }
+                    }
+                }
+            } else if (*t == "group_msg_fetch") {
+                std::int64_t selfUid = 0;
+                const AuthRc ar = requireFriendAuth(client, helloOk, json, selfUid);
+                if (ar == AuthRc::IoErr) {
+                    goto end;
+                }
+                if (ar == AuthRc::ContinueLoop) {
+                    continue;
+                }
+                const auto groupOpt = parseJsonInt64Field(json, "group_id");
+                if (!groupOpt || *groupOpt <= 0) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrInvalidInput, "缺少 group_id")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                const std::int64_t afterId = parseJsonInt64Field(json, "after_id").value_or(0);
+                int limit = static_cast<int>(parseJsonInt64Field(json, "limit").value_or(50));
+                std::vector<AppDatabase::GroupChatMessageRow> rows;
+                const AppDatabase::GroupOpOutcome go =
+                    AppDatabase::groupMessageFetch(selfUid, *groupOpt, afterId, limit, rows);
+                if (!go.ok) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(go.errCode, go.message)))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                std::vector<GroupChatMessageEntry> ents;
+                ents.reserve(rows.size());
+                for (const auto &r : rows) {
+                    GroupChatMessageEntry e;
+                    e.messageId = r.messageId;
+                    e.groupId = r.groupId;
+                    e.fromUserId = r.fromUserId;
+                    e.fromNickname = r.fromNickname;
+                    e.content = r.content;
+                    e.createdAt = r.createdAt;
+                    ents.push_back(std::move(e));
+                }
+                if (!sendAll(client, encodeFrame(buildGroupMsgFetchOkJson(*groupOpt, ents)))) {
+                    goto end;
+                }
+            } else if (*t == "group_leave") {
+                std::int64_t selfUid = 0;
+                const AuthRc ar = requireFriendAuth(client, helloOk, json, selfUid);
+                if (ar == AuthRc::IoErr) {
+                    goto end;
+                }
+                if (ar == AuthRc::ContinueLoop) {
+                    continue;
+                }
+                const auto groupOpt = parseJsonInt64Field(json, "group_id");
+                if (!groupOpt || *groupOpt <= 0) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrInvalidInput, "缺少 group_id")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                const AppDatabase::GroupOpOutcome go = AppDatabase::groupLeave(selfUid, *groupOpt);
+                if (!go.ok) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(go.errCode, go.message)))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                if (!sendAll(client, encodeFrame(buildGroupLeaveOkJson(*groupOpt)))) {
+                    goto end;
+                }
             } else if (*t == "file_offer") {
                 std::int64_t selfUid = 0;
                 const AuthRc ar = requireFriendAuth(client, helloOk, json, selfUid);
@@ -901,6 +1120,12 @@ void handleClient(SockHandle client, std::atomic<std::uint64_t> &connId)
                         c = static_cast<char>(c - 'A' + 'a');
                     }
                 }
+                FileVoiceMeta voiceMeta;
+                voiceMeta.isVoice = (json.find("\"voice\":true") != std::string::npos);
+                if (voiceMeta.isVoice) {
+                    voiceMeta.durationMs = parseJsonInt64Field(json, "voice_duration_ms").value_or(0);
+                    voiceMeta.mimeType = parseJsonStringField(json, "mime_type").value_or(std::string());
+                }
                 const std::uint64_t fsz = static_cast<std::uint64_t>(*szOpt);
                 const bool asSticker = (json.find("\"as_sticker\":true") != std::string::npos);
                 const std::optional<std::uint32_t> offerChunkBinaryMax =
@@ -908,7 +1133,7 @@ void handleClient(SockHandle client, std::atomic<std::uint64_t> &connId)
                 if (!peerHasOnlineSession(*peerOpt)) {
                     if (fsz > 0 && fsz <= kFileTransferMaxBytes) {
                         const FileOfferResult fo = fileRelayOfferServerBufferPeerOffline(
-                            selfUid, *peerOpt, *fnOpt, fsz, sha, asSticker, offerChunkBinaryMax);
+                            selfUid, *peerOpt, *fnOpt, fsz, sha, asSticker, voiceMeta, offerChunkBinaryMax);
                         if (!fo.ok) {
                             if (!sendAll(client, encodeFrame(buildErrorJson(fo.errCode, fo.message)))) {
                                 goto end;
@@ -930,7 +1155,8 @@ void handleClient(SockHandle client, std::atomic<std::uint64_t> &connId)
                     continue;
                 }
                 const FileOfferResult fo =
-                    fileRelayOffer(selfUid, *peerOpt, *fnOpt, fsz, std::move(sha), asSticker, offerChunkBinaryMax);
+                    fileRelayOffer(selfUid, *peerOpt, *fnOpt, fsz, std::move(sha), asSticker, voiceMeta,
+                                   offerChunkBinaryMax);
                 if (!fo.ok) {
                     if (!sendAll(client, encodeFrame(buildErrorJson(fo.errCode, fo.message)))) {
                         goto end;

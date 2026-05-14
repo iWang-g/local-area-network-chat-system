@@ -170,6 +170,58 @@ public:
     /// 删除双方在该会话中的全部 `messages` 行（双向）；须为好友。
     static MsgOpOutcome messageClearConversation(std::int64_t selfUserId, std::int64_t peerUserId);
 
+    /// --- 群聊（阶段 7，MVP）---
+
+    struct GroupListRow {
+        std::int64_t groupId = 0;
+        std::string name;
+        std::int64_t ownerUserId = 0;
+        std::int64_t memberCount = 0;
+        std::int64_t joinedAt = 0;
+        std::string lastMessageContent;
+        std::int64_t lastMessageAt = 0;
+        std::int64_t lastMessageFromUserId = 0;
+        std::string lastMessageFromNickname;
+    };
+
+    struct GroupMemberRow {
+        std::int64_t userId = 0;
+        std::string email;
+        std::string nickname;
+        std::string role;
+        std::int64_t joinedAt = 0;
+    };
+
+    struct GroupChatMessageRow {
+        std::int64_t messageId = 0;
+        std::int64_t groupId = 0;
+        std::int64_t fromUserId = 0;
+        std::string fromNickname;
+        std::string content;
+        std::int64_t createdAt = 0;
+    };
+
+    struct GroupOpOutcome {
+        bool ok = false;
+        int errCode = 0;
+        std::string message;
+        std::int64_t groupId = 0;
+        std::int64_t messageId = 0;
+        std::int64_t createdAt = 0;
+    };
+
+    static GroupOpOutcome groupCreate(std::int64_t ownerUserId, const std::string &nameUtf8,
+                                      const std::vector<std::int64_t> &memberUserIds);
+    static GroupOpOutcome groupList(std::int64_t selfUserId, std::vector<GroupListRow> &out);
+    static GroupOpOutcome groupMembers(std::int64_t selfUserId, std::int64_t groupId,
+                                       std::vector<GroupMemberRow> &out);
+    static GroupOpOutcome groupMessageSend(std::int64_t fromUserId, std::int64_t groupId, const std::string &contentUtf8);
+    static GroupOpOutcome groupMessageFetch(std::int64_t selfUserId, std::int64_t groupId, std::int64_t afterId, int limit,
+                                            std::vector<GroupChatMessageRow> &out);
+    static GroupOpOutcome groupLeave(std::int64_t selfUserId, std::int64_t groupId);
+    static GroupOpOutcome groupMemberIds(std::int64_t selfUserId, std::int64_t groupId,
+                                         std::vector<std::int64_t> &outMemberUserIds);
+
     /// --- 文件传输记录（阶段 6）---
 
     struct FileOpOutcome {

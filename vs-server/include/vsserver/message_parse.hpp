@@ -42,6 +42,41 @@ struct ChatMessageEntry {
     std::int64_t createdAt = 0;
 };
 
+struct FileVoiceMeta {
+    bool isVoice = false;
+    std::int64_t durationMs = 0;
+    std::string mimeType;
+};
+
+struct GroupListEntry {
+    std::int64_t groupId = 0;
+    std::string name;
+    std::int64_t ownerUserId = 0;
+    std::int64_t memberCount = 0;
+    std::int64_t joinedAt = 0;
+    std::string lastMessagePreview;
+    std::int64_t lastMessageAt = 0;
+    std::int64_t lastMessageFromUserId = 0;
+    std::string lastMessageFromNickname;
+};
+
+struct GroupMemberEntry {
+    std::int64_t userId = 0;
+    std::string email;
+    std::string nickname;
+    std::string role;
+    std::int64_t joinedAt = 0;
+};
+
+struct GroupChatMessageEntry {
+    std::int64_t messageId = 0;
+    std::int64_t groupId = 0;
+    std::int64_t fromUserId = 0;
+    std::string fromNickname;
+    std::string content;
+    std::int64_t createdAt = 0;
+};
+
 /// 从 JSON 文本中解析 "type" 字段（字符串值）；失败返回 nullopt。
 std::optional<std::string> parseMessageType(const std::string &jsonUtf8);
 
@@ -50,6 +85,9 @@ std::optional<std::string> parseJsonStringField(const std::string &jsonUtf8, con
 
 /// 解析 `"field": <integer>`（无引号数字）。
 std::optional<std::int64_t> parseJsonInt64Field(const std::string &jsonUtf8, const char *asciiFieldName);
+/// 解析 `"field": [1,2,3]` 形式的整型数组；支持空数组。
+std::optional<std::vector<std::int64_t>> parseJsonInt64ArrayField(const std::string &jsonUtf8,
+                                                                  const char *asciiFieldName);
 
 std::string jsonEscapeString(std::string_view utf8);
 
@@ -90,6 +128,15 @@ std::string buildMsgClearOkJson(std::int64_t peerUserId, std::int64_t deletedRow
 /// 对端在线时下推：发起清空的一方 `by_user_id`。
 std::string buildMsgConvClearedJson(std::int64_t byUserId);
 
+std::string buildGroupCreateOkJson(std::int64_t groupId, const std::string &nameUtf8, std::int64_t ownerUserId,
+                                   std::int64_t memberCount);
+std::string buildGroupListOkJson(const std::vector<GroupListEntry> &groups);
+std::string buildGroupMembersOkJson(std::int64_t groupId, const std::vector<GroupMemberEntry> &members);
+std::string buildGroupMsgSendOkJson(const GroupChatMessageEntry &e);
+std::string buildGroupMsgFetchOkJson(std::int64_t groupId, const std::vector<GroupChatMessageEntry> &messages);
+std::string buildGroupMsgPushJson(const GroupChatMessageEntry &e);
+std::string buildGroupLeaveOkJson(std::int64_t groupId);
+
 /// 阶段 6：文件分片（JSON + Base64）；若给定 `chunkPlainMaxBinary` 则附带二进制分片能力字段。
 std::string buildFileOfferOkJson(std::int64_t transferId, std::uint32_t chunkPlainMax,
                                  std::optional<std::uint32_t> chunkPlainMaxBinary = std::nullopt);
@@ -115,7 +162,8 @@ bool parseLnCbSenderChunkPayload(const std::string &payload, LnCbSenderChunkPars
 /// 已向接收方投递 `file_incoming` 后发给发送方，用于将气泡状态更新为「已发送」。
 std::string buildFileOfferDeliveredJson(std::int64_t transferId);
 std::string buildFileIncomingJson(std::int64_t transferId, std::int64_t fromUserId, const std::string &fileNameUtf8,
-                                  std::uint64_t fileSize, const std::string &sha256HexLower);
+                                  std::uint64_t fileSize, const std::string &sha256HexLower,
+                                  const FileVoiceMeta &voiceMeta = {});
 std::string buildFileSendReadyJson(std::int64_t transferId);
 std::string buildFileChunkPushJson(std::int64_t transferId, std::uint32_t seq, const std::string &dataB64Utf8);
 std::string buildFileTransferDonePushJson(std::int64_t transferId, const std::string &sha256HexLower);
@@ -134,7 +182,8 @@ std::string buildFileStickerPullDoneJson(std::int64_t transferId, const std::str
 /// `state`：`ok` 时填 `sha256HexLower`；`failed` 时填 `reasonUtf8`，`sha256` 忽略。
 std::string buildFileChatMessageContentJson(std::int64_t transferId, const std::string &fileNameUtf8,
                                             std::int64_t fileSizeBytes, const std::string &sha256HexLower,
-                                            const char *stateAscii, const std::string &reasonUtf8, bool asSticker = false);
+                                            const char *stateAscii, const std::string &reasonUtf8, bool asSticker = false,
+                                            const FileVoiceMeta &voiceMeta = {});
 
 /// 校验握手：type=hello、magic=LNCS、version=1。
 bool validateHello(const std::string &jsonUtf8, std::string &err);

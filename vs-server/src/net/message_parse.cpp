@@ -2,6 +2,8 @@
 #include "vsserver/protocol.hpp"
 #include "vsserver/base64.hpp"
 
+#include <cctype>
+#include <cstdint>
 #include <cstring>
 #include <regex>
 #include <sstream>
@@ -9,6 +11,8 @@
 #include <vector>
 
 namespace vsserver {
+
+namespace {
 
 static std::optional<std::string> matchOne(const std::string &json, const std::regex &re)
 {
@@ -19,35 +23,296 @@ static std::optional<std::string> matchOne(const std::string &json, const std::r
     return m[1].str();
 }
 
+static bool isSpace(char c)
+{
+    return std::isspace(static_cast<unsigned char>(c)) != 0;
+}
+
+/// 从 `i` 指向的开引号 `"` 起读取 JSON 字符串内容（支持常见转义），结束后 `i` 停在闭合 `"` 的下一字符。
+static std::optional<std::string> readJsonStringToken(const std::string &json, std::size_t &io_i)
+{
+    if (io_i >= json.size() || json[io_i] != '"') {
+        return std::nullopt;
+    }
+    ++io_i;
+    std::string out;
+    while (io_i < json.size()) {
+        const unsigned char cu = static_cast<unsigned char>(json[io_i]);
+        if (cu == '"') {
+            ++io_i;
+            return out;
+        }
+        if (cu == '\\' && io_i + 1 < json.size()) {
+            const char e = json[io_i + 1];
+            switch (e) {
+            case '"':
+                out.push_back('"');
+                io_i += 2;
+                continue;
+            case '\\':
+                out.push_back('\\');
+                io_i += 2;
+                continue;
+            case '/':
+                out.push_back('/');
+                io_i += 2;
+                continue;
+            case 'b':
+                out.push_back('\b');
+                io_i += 2;
+                continue;
+            case 'f':
+                out.push_back('\f');
+                io_i += 2;
+                continue;
+            case 'n':
+                out.push_back('\n');
+                io_i += 2;
+                continue;
+            case 'r':
+                out.push_back('\r');
+                io_i += 2;
+                continue;
+            case 't':
+                out.push_back('\t');
+                io_i += 2;
+                continue;
+            case 'u':
+                if (io_i + 6 > json.size()) {
+                    return std::nullopt;
+                }
+                {
+                    std::uint32_t cp = 0;
+                    for (int k = 0; k < 4; ++k) {
+                        const char h = json[io_i + 2 + k];
+                        std::uint32_t v = 0;
+                        if (h >= '0' && h <= '9') {
+                            v = static_cast<std::uint32_t>(h - '0');
+                        } else if (h >= 'a' && h <= 'f') {
+                            v = static_cast<std::uint32_t>(h - 'a' + 10);
+                        } else if (h >= 'A' && h <= 'F') {
+                            v = static_cast<std::uint32_t>(h - 'A' + 10);
+                        } else {
+                            return std::nullopt;
+                        }
+                        cp = (cp << 4U) | v;
+                    }
+                    if (cp <= 0x7FU) {
+                        out.push_back(static_cast<char>(cp));
+                    } else if (cp <= 0x7FFU) {
+                        out.push_back(static_cast<char>(0xC0U | ((cp >> 6U) & 0x1FU)));
+                        out.push_back(static_cast<char>(0x80U | (cp & 0x3FU)));
+                    } else if (cp <= 0xFFFFU) {
+                        out.push_back(static_cast<char>(0xE0U | ((cp >> 12U) & 0x0FU)));
+                        out.push_back(static_cast<char>(0x80U | ((cp >> 6U) & 0x3FU)));
+                        out.push_back(static_cast<char>(0x80U | (cp & 0x3FU)));
+                    } else {
+                        return std::nullopt;
+                    }
+                    io_i += 6;
+                    continue;
+                }
+            default:
+                out.push_back(e);
+                io_i += 2;
+                continue;
+            }
+        }
+        out.push_back(static_cast<char>(cu));
+        ++io_i;
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
+/// 不对整帧跑 std::regex（大帧如 avatar_b64 会在 libstdc++ 下栈溢出/崩溃）；线性扫描。
 std::optional<std::string> parseMessageType(const std::string &jsonUtf8)
 {
-    // 使用 R"delim(...)delim"，避免正则里的 )" 被当成原始字符串结束符
-    static const std::regex re(R"re("type"\s*:\s*"([^"]*)")re");
-    return matchOne(jsonUtf8, re);
+    constexpr const char kKey[] = "\"type\"";
+    std::size_t pos = 0;
+    const std::size_t n = jsonUtf8.size();
+    const std::size_t keyLen = sizeof(kKey) - 1;
+    while (pos < n) {
+        pos = jsonUtf8.find(kKey, pos);
+        if (pos == std::string::npos) {
+            return std::nullopt;
+        }
+        std::size_t i = pos + keyLen;
+        while (i < n && isSpace(jsonUtf8[i])) {
+            ++i;
+        }
+        if (i >= n || jsonUtf8[i] != ':') {
+            ++pos;
+            continue;
+        }
+        ++i;
+        while (i < n && isSpace(jsonUtf8[i])) {
+            ++i;
+        }
+        std::optional<std::string> val = readJsonStringToken(jsonUtf8, i);
+        if (val) {
+            return val;
+        }
+        ++pos;
+    }
+    return std::nullopt;
 }
 
 std::optional<std::string> parseJsonStringField(const std::string &jsonUtf8, const char *asciiFieldName)
 {
-    const std::string pattern =
-        std::string(R"re(")re") + asciiFieldName + R"re("\s*:\s*"([^"]*)")re";
-    const std::regex re(pattern);
-    return matchOne(jsonUtf8, re);
+    const std::string key = std::string("\"") + asciiFieldName + "\"";
+    std::size_t pos = 0;
+    const std::size_t n = jsonUtf8.size();
+    while (pos < n) {
+        pos = jsonUtf8.find(key, pos);
+        if (pos == std::string::npos) {
+            return std::nullopt;
+        }
+        std::size_t i = pos + key.size();
+        while (i < n && isSpace(jsonUtf8[i])) {
+            ++i;
+        }
+        if (i >= n || jsonUtf8[i] != ':') {
+            ++pos;
+            continue;
+        }
+        ++i;
+        while (i < n && isSpace(jsonUtf8[i])) {
+            ++i;
+        }
+        std::optional<std::string> val = readJsonStringToken(jsonUtf8, i);
+        if (val) {
+            return val;
+        }
+        ++pos;
+    }
+    return std::nullopt;
 }
 
 std::optional<std::int64_t> parseJsonInt64Field(const std::string &jsonUtf8, const char *asciiFieldName)
 {
-    const std::string pattern =
-        std::string(R"re(")re") + asciiFieldName + R"re("\s*:\s*(-?[0-9]+))re";
-    const std::regex re(pattern);
-    const auto s = matchOne(jsonUtf8, re);
-    if (!s) {
-        return std::nullopt;
+    const std::string key = std::string("\"") + asciiFieldName + "\"";
+    std::size_t pos = 0;
+    const std::size_t n = jsonUtf8.size();
+    while (pos < n) {
+        pos = jsonUtf8.find(key, pos);
+        if (pos == std::string::npos) {
+            return std::nullopt;
+        }
+        std::size_t i = pos + key.size();
+        while (i < n && isSpace(jsonUtf8[i])) {
+            ++i;
+        }
+        if (i >= n || jsonUtf8[i] != ':') {
+            ++pos;
+            continue;
+        }
+        ++i;
+        while (i < n && isSpace(jsonUtf8[i])) {
+            ++i;
+        }
+        bool neg = false;
+        if (i < n && jsonUtf8[i] == '-') {
+            neg = true;
+            ++i;
+        }
+        if (i >= n || jsonUtf8[i] < '0' || jsonUtf8[i] > '9') {
+            ++pos;
+            continue;
+        }
+        const std::size_t start = i;
+        while (i < n && jsonUtf8[i] >= '0' && jsonUtf8[i] <= '9') {
+            ++i;
+        }
+        try {
+            long long v = std::stoll(jsonUtf8.substr(start, i - start));
+            if (neg) {
+                v = -v;
+            }
+            return static_cast<std::int64_t>(v);
+        } catch (...) {
+            return std::nullopt;
+        }
     }
-    try {
-        return static_cast<std::int64_t>(std::stoll(*s));
-    } catch (...) {
-        return std::nullopt;
+    return std::nullopt;
+}
+
+std::optional<std::vector<std::int64_t>> parseJsonInt64ArrayField(const std::string &jsonUtf8, const char *asciiFieldName)
+{
+    const std::string key = std::string("\"") + asciiFieldName + "\"";
+    std::size_t pos = 0;
+    const std::size_t n = jsonUtf8.size();
+    while (pos < n) {
+        pos = jsonUtf8.find(key, pos);
+        if (pos == std::string::npos) {
+            return std::nullopt;
+        }
+        std::size_t i = pos + key.size();
+        while (i < n && isSpace(jsonUtf8[i])) {
+            ++i;
+        }
+        if (i >= n || jsonUtf8[i] != ':') {
+            ++pos;
+            continue;
+        }
+        ++i;
+        while (i < n && isSpace(jsonUtf8[i])) {
+            ++i;
+        }
+        if (i >= n || jsonUtf8[i] != '[') {
+            ++pos;
+            continue;
+        }
+        ++i;
+        std::vector<std::int64_t> out;
+        for (;;) {
+            while (i < n && isSpace(jsonUtf8[i])) {
+                ++i;
+            }
+            if (i >= n) {
+                return std::nullopt;
+            }
+            if (jsonUtf8[i] == ']') {
+                ++i;
+                return out;
+            }
+            bool neg = false;
+            if (jsonUtf8[i] == '-') {
+                neg = true;
+                ++i;
+            }
+            if (i >= n || jsonUtf8[i] < '0' || jsonUtf8[i] > '9') {
+                return std::nullopt;
+            }
+            const std::size_t start = i;
+            while (i < n && jsonUtf8[i] >= '0' && jsonUtf8[i] <= '9') {
+                ++i;
+            }
+            try {
+                long long v = std::stoll(jsonUtf8.substr(start, i - start));
+                out.push_back(static_cast<std::int64_t>(neg ? -v : v));
+            } catch (...) {
+                return std::nullopt;
+            }
+            while (i < n && isSpace(jsonUtf8[i])) {
+                ++i;
+            }
+            if (i >= n) {
+                return std::nullopt;
+            }
+            if (jsonUtf8[i] == ',') {
+                ++i;
+                continue;
+            }
+            if (jsonUtf8[i] == ']') {
+                ++i;
+                return out;
+            }
+            return std::nullopt;
+        }
     }
+    return std::nullopt;
 }
 
 std::string jsonEscapeString(std::string_view utf8)
@@ -312,6 +577,98 @@ std::string buildMsgConvClearedJson(const std::int64_t byUserId)
     return std::string(R"({"type":"msg_conv_cleared","by_user_id":)") + std::to_string(byUserId) + '}';
 }
 
+std::string buildGroupCreateOkJson(const std::int64_t groupId, const std::string &nameUtf8, const std::int64_t ownerUserId,
+                                   const std::int64_t memberCount)
+{
+    std::ostringstream oss;
+    oss << R"({"type":"group_create_ok","group_id":)" << groupId << R"(,"name":")" << jsonEscapeString(nameUtf8)
+        << R"(","owner_user_id":)" << ownerUserId << R"(,"member_count":)" << memberCount << '}';
+    return oss.str();
+}
+
+std::string buildGroupListOkJson(const std::vector<GroupListEntry> &groups)
+{
+    std::ostringstream oss;
+    oss << R"({"type":"group_list_ok","groups":[)";
+    for (std::size_t i = 0; i < groups.size(); ++i) {
+        if (i > 0) {
+            oss << ',';
+        }
+        const auto &g = groups[i];
+        oss << R"({"group_id":)" << g.groupId << R"(,"name":")" << jsonEscapeString(g.name)
+            << R"(","owner_user_id":)" << g.ownerUserId << R"(,"member_count":)" << g.memberCount
+            << R"(,"joined_at":)" << g.joinedAt;
+        if (g.lastMessageAt > 0) {
+            oss << R"(,"last_message_preview":")" << jsonEscapeString(g.lastMessagePreview)
+                << R"(","last_message_at":)" << g.lastMessageAt
+                << R"(,"last_message_from_user_id":)" << g.lastMessageFromUserId;
+            if (!g.lastMessageFromNickname.empty()) {
+                oss << R"(,"last_message_from_nickname":")" << jsonEscapeString(g.lastMessageFromNickname) << '"';
+            }
+        }
+        oss << '}';
+    }
+    oss << "]}";
+    return oss.str();
+}
+
+std::string buildGroupMembersOkJson(const std::int64_t groupId, const std::vector<GroupMemberEntry> &members)
+{
+    std::ostringstream oss;
+    oss << R"({"type":"group_members_ok","group_id":)" << groupId << R"(,"members":[)";
+    for (std::size_t i = 0; i < members.size(); ++i) {
+        if (i > 0) {
+            oss << ',';
+        }
+        const auto &m = members[i];
+        oss << R"({"user_id":)" << m.userId << R"(,"email":")" << jsonEscapeString(m.email)
+            << R"(","nickname":")" << jsonEscapeString(m.nickname) << R"(","role":")"
+            << jsonEscapeString(m.role) << R"(","joined_at":)" << m.joinedAt << '}';
+    }
+    oss << "]}";
+    return oss.str();
+}
+
+std::string buildGroupMsgSendOkJson(const GroupChatMessageEntry &e)
+{
+    std::ostringstream oss;
+    oss << R"({"type":"group_msg_send_ok","message_id":)" << e.messageId << R"(,"group_id":)" << e.groupId
+        << R"(,"from_user_id":)" << e.fromUserId << R"(,"from_nickname":")" << jsonEscapeString(e.fromNickname)
+        << R"(","content":")" << jsonEscapeString(e.content) << R"(","created_at":)" << e.createdAt << '}';
+    return oss.str();
+}
+
+std::string buildGroupMsgFetchOkJson(const std::int64_t groupId, const std::vector<GroupChatMessageEntry> &messages)
+{
+    std::ostringstream oss;
+    oss << R"({"type":"group_msg_fetch_ok","group_id":)" << groupId << R"(,"messages":[)";
+    for (std::size_t i = 0; i < messages.size(); ++i) {
+        if (i > 0) {
+            oss << ',';
+        }
+        const auto &e = messages[i];
+        oss << R"({"message_id":)" << e.messageId << R"(,"group_id":)" << e.groupId << R"(,"from_user_id":)"
+            << e.fromUserId << R"(,"from_nickname":")" << jsonEscapeString(e.fromNickname) << R"(","content":")"
+            << jsonEscapeString(e.content) << R"(","created_at":)" << e.createdAt << '}';
+    }
+    oss << "]}";
+    return oss.str();
+}
+
+std::string buildGroupMsgPushJson(const GroupChatMessageEntry &e)
+{
+    std::ostringstream oss;
+    oss << R"({"type":"group_msg_push","message_id":)" << e.messageId << R"(,"group_id":)" << e.groupId
+        << R"(,"from_user_id":)" << e.fromUserId << R"(,"from_nickname":")" << jsonEscapeString(e.fromNickname)
+        << R"(","content":")" << jsonEscapeString(e.content) << R"(","created_at":)" << e.createdAt << '}';
+    return oss.str();
+}
+
+std::string buildGroupLeaveOkJson(const std::int64_t groupId)
+{
+    return std::string(R"({"type":"group_leave_ok","group_id":)") + std::to_string(groupId) + '}';
+}
+
 std::string buildHelloOkJson(bool fileChunkBinary)
 {
     if (!fileChunkBinary) {
@@ -461,12 +818,19 @@ std::string buildFileOfferDeliveredJson(const std::int64_t transferId)
 
 std::string buildFileIncomingJson(const std::int64_t transferId, const std::int64_t fromUserId,
                                   const std::string &fileNameUtf8, const std::uint64_t fileSize,
-                                  const std::string &sha256HexLower)
+                                  const std::string &sha256HexLower, const FileVoiceMeta &voiceMeta)
 {
     std::ostringstream oss;
     oss << R"({"type":"file_incoming","transfer_id":)" << transferId << R"(,"from_user_id":)" << fromUserId
         << R"(,"file_name":")" << jsonEscapeString(fileNameUtf8) << R"(","file_size":)" << fileSize
-        << R"(,"sha256_hex":")" << jsonEscapeString(sha256HexLower) << "\"}";
+        << R"(,"sha256_hex":")" << jsonEscapeString(sha256HexLower) << '"';
+    if (voiceMeta.isVoice) {
+        oss << R"(,"voice":true,"voice_duration_ms":)" << voiceMeta.durationMs;
+        if (!voiceMeta.mimeType.empty()) {
+            oss << R"(,"mime_type":")" << jsonEscapeString(voiceMeta.mimeType) << '"';
+        }
+    }
+    oss << '}';
     return oss.str();
 }
 
@@ -554,12 +918,19 @@ static bool isRasterImageFileName(const std::string &name)
 
 std::string buildFileChatMessageContentJson(const std::int64_t transferId, const std::string &fileNameUtf8,
                                             const std::int64_t fileSizeBytes, const std::string &sha256HexLower,
-                                            const char *stateAscii, const std::string &reasonUtf8, const bool asSticker)
+                                            const char *stateAscii, const std::string &reasonUtf8, const bool asSticker,
+                                            const FileVoiceMeta &voiceMeta)
 {
     const char *const kindAscii = isRasterImageFileName(fileNameUtf8) ? "image" : "file";
     std::ostringstream oss;
     oss << "{\"kind\":\"" << kindAscii << R"(","transfer_id":)" << transferId << R"(,"name":")"
         << jsonEscapeString(fileNameUtf8) << R"(","size":)" << fileSizeBytes;
+    if (voiceMeta.isVoice) {
+        oss << R"(,"voice":true,"voice_duration_ms":)" << voiceMeta.durationMs;
+        if (!voiceMeta.mimeType.empty()) {
+            oss << R"(,"mime_type":")" << jsonEscapeString(voiceMeta.mimeType) << '"';
+        }
+    }
     if (std::string_view(stateAscii) == "ok") {
         oss << R"(,"state":"ok","sha256":")" << jsonEscapeString(sha256HexLower) << "\"";
         if (asSticker) {

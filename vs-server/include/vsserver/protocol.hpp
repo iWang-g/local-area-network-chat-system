@@ -45,6 +45,13 @@ inline constexpr int kErrFriendNotFriend = 3008;
 inline constexpr int kErrMsgNotFriend = 4001;
 inline constexpr int kErrMsgTooLong = 4002;
 
+/// 群聊（阶段 7，MVP）
+inline constexpr int kErrGroupNotFound = 6001;
+inline constexpr int kErrGroupNotMember = 6002;
+inline constexpr int kErrGroupBadName = 6003;
+inline constexpr int kErrGroupBadMembers = 6004;
+inline constexpr int kErrGroupOwnerLeave = 6005;
+
 /// 文件中继（阶段 6，JSON + Base64 分片，单帧 ≤256KiB）
 inline constexpr int kErrFileNotFriend = 5001;
 inline constexpr int kErrFileTooLarge = 5002;

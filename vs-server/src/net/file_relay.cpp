@@ -35,6 +35,7 @@ struct Rt {
     std::uint64_t fileSize = 0;
     std::string sha256Hex;
     bool asSticker = false;
+    FileVoiceMeta voiceMeta;
     /// 对方离线：分片写入服务端临时文件，完成后校验 SHA 并移到 relay 缓存路径。
     bool serverBufferPeerOffline = false;
     std::filesystem::path serverPartialPath;
@@ -155,7 +156,7 @@ static void abortTransferDb(const std::int64_t transferId)
 
 FileOfferResult fileRelayOffer(const std::int64_t fromUserId, const std::int64_t peerUserId,
                                std::string rawFileNameUtf8, const std::uint64_t fileSizeBytes,
-                               std::string sha256HexLower, const bool asSticker,
+                               std::string sha256HexLower, const bool asSticker, FileVoiceMeta voiceMeta,
                                const std::optional<std::uint32_t> chunkPlainMaxBinary)
 {
     FileOfferResult r;
@@ -206,6 +207,7 @@ FileOfferResult fileRelayOffer(const std::int64_t fromUserId, const std::int64_t
     rt.nextSeqExpected = 0;
     rt.bytesForwarded = 0;
     rt.asSticker = asSticker;
+    rt.voiceMeta = std::move(voiceMeta);
 
     {
         std::lock_guard<std::mutex> lk(g_mu);
@@ -215,13 +217,14 @@ FileOfferResult fileRelayOffer(const std::int64_t fromUserId, const std::int64_t
     r.ok = true;
     r.transferId = ins.transferId;
     r.jsonOfferOkUtf8 = buildFileOfferOkJson(ins.transferId, kFileChunkPlainMax, chunkPlainMaxBinary);
-    r.jsonIncomingUtf8 = buildFileIncomingJson(ins.transferId, fromUserId, name, fileSizeBytes, sha256HexLower);
+    r.jsonIncomingUtf8 =
+        buildFileIncomingJson(ins.transferId, fromUserId, name, fileSizeBytes, sha256HexLower, rt.voiceMeta);
     return r;
 }
 
 FileOfferResult fileRelayOfferServerBufferPeerOffline(const std::int64_t fromUserId, const std::int64_t peerUserId,
                                                       std::string rawFileNameUtf8, const std::uint64_t fileSizeBytes,
-                                                      std::string sha256HexLower, const bool asSticker,
+                                                      std::string sha256HexLower, const bool asSticker, FileVoiceMeta voiceMeta,
                                                       const std::optional<std::uint32_t> chunkPlainMaxBinary)
 {
     FileOfferResult r;
@@ -276,6 +279,7 @@ FileOfferResult fileRelayOfferServerBufferPeerOffline(const std::int64_t fromUse
     rt.fileSize = fileSizeBytes;
     rt.sha256Hex = std::move(sha256HexLower);
     rt.asSticker = asSticker;
+    rt.voiceMeta = std::move(voiceMeta);
     rt.serverBufferPeerOffline = true;
     rt.serverPartialPath = offlinePartialFsPath(ins.transferId);
     rt.phase = Rt::Phase::Streaming;
@@ -400,7 +404,8 @@ FileNotifyResult fileRelayReject(const std::int64_t selfUserId, const std::int64
     const std::time_t now = std::time(nullptr);
     (void)AppDatabase::fileTransferSetStatus(transferId, "rejected", static_cast<std::int64_t>(now));
     const std::string chatBody = buildFileChatMessageContentJson(
-        transferId, snap.fileName, static_cast<std::int64_t>(snap.fileSize), "", "failed", "对方已拒绝接收", snap.asSticker);
+        transferId, snap.fileName, static_cast<std::int64_t>(snap.fileSize), "", "failed", "对方已拒绝接收",
+        snap.asSticker, snap.voiceMeta);
     const AppDatabase::MsgOpOutcome moChat =
         AppDatabase::messageInsertChatRecord(snap.fromUserId, snap.toUserId, chatBody);
     r.ok = true;
@@ -718,7 +723,7 @@ FileDoneRelayResult fileRelayOnSenderDone(const std::int64_t selfUserId, const s
         }
         const std::string chatBody =
             buildFileChatMessageContentJson(copy.id, copy.fileName, static_cast<std::int64_t>(copy.fileSize),
-                                            shaForMsg, "ok", {}, copy.asSticker);
+                                            shaForMsg, "ok", {}, copy.asSticker, copy.voiceMeta);
         const AppDatabase::MsgOpOutcome moChat =
             AppDatabase::messageInsertChatRecord(copy.fromUserId, copy.toUserId, chatBody);
         if (moChat.ok) {
@@ -746,7 +751,7 @@ FileDoneRelayResult fileRelayOnSenderDone(const std::int64_t selfUserId, const s
     }
     const std::string chatBody =
         buildFileChatMessageContentJson(copy.id, copy.fileName, static_cast<std::int64_t>(copy.fileSize),
-                                        copy.sha256Hex, "ok", {}, copy.asSticker);
+                                        copy.sha256Hex, "ok", {}, copy.asSticker, copy.voiceMeta);
     const AppDatabase::MsgOpOutcome moChat =
         AppDatabase::messageInsertChatRecord(copy.fromUserId, copy.toUserId, chatBody);
     if (moChat.ok) {
@@ -805,7 +810,7 @@ std::vector<FileDisconnectItem> fileRelayOnUserDisconnect(const std::int64_t use
         it.fileAbortedJson = buildFileAbortedJson(tid, "对方已离线");
         const std::string chatBody =
             buildFileChatMessageContentJson(tid, t.fileName, static_cast<std::int64_t>(t.fileSize), "", "failed",
-                                            "对方已离线", t.asSticker);
+                                            "对方已离线", t.asSticker, t.voiceMeta);
         const AppDatabase::MsgOpOutcome moChat =
             AppDatabase::messageInsertChatRecord(t.fromUserId, t.toUserId, chatBody);
         if (moChat.ok) {

@@ -7,8 +7,17 @@
 #include <cstdlib>
 #include <string>
 
+#ifndef _WIN32
+#include <signal.h>
+#endif
+
 int main(int argc, char *argv[])
 {
+#ifndef _WIN32
+    // Linux/macOS：向已关闭的对端 send 会触发 SIGPIPE，默认终止进程；Windows 无此语义。
+    (void)signal(SIGPIPE, SIG_IGN);
+#endif
+
     vsserver::Logger::init();
 
     std::string dbErr;

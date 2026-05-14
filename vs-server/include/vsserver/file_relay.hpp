@@ -54,12 +54,14 @@ struct FileDoneRelayResult {
 
 FileOfferResult fileRelayOffer(std::int64_t fromUserId, std::int64_t peerUserId, std::string rawFileNameUtf8,
                                std::uint64_t fileSizeBytes, std::string sha256HexLower, bool asSticker = false,
+                               FileVoiceMeta voiceMeta = {},
                                std::optional<std::uint32_t> chunkPlainMaxBinary = std::nullopt);
 
 /// 对方离线：在服务端磁盘缓冲全部分片，完成后写入会话（无需对端 `file_accept`）。`asSticker` 写入消息 JSON。
 FileOfferResult fileRelayOfferServerBufferPeerOffline(std::int64_t fromUserId, std::int64_t peerUserId,
                                                       std::string rawFileNameUtf8, std::uint64_t fileSizeBytes,
                                                       std::string sha256HexLower, bool asSticker,
+                                                      FileVoiceMeta voiceMeta = {},
                                                       std::optional<std::uint32_t> chunkPlainMaxBinary = std::nullopt);
 
 /// 若存在可读的离线缓冲文件，返回其 UTF-8 路径；否则返回空。

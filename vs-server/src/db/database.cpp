@@ -231,6 +231,31 @@ static bool isValidDisplayNicknameUtf8(const std::string &s)
     return true;
 }
 
+/// 群名：1～40 个 Unicode 码位；合法 UTF-8；禁止 ASCII 控制字符与 DEL；总字节数上限 200。
+static bool isValidGroupNameUtf8(const std::string &s)
+{
+    const std::string t = trimAscii(s);
+    if (t.empty() || t.size() > 200) {
+        return false;
+    }
+    std::size_t i = 0;
+    std::size_t cps = 0;
+    while (i < t.size()) {
+        char32_t cp = 0;
+        if (!utf8NextCodepoint(t, i, cp)) {
+            return false;
+        }
+        if (cp < 0x20u || cp == 0x7Fu) {
+            return false;
+        }
+        ++cps;
+        if (cps > 40) {
+            return false;
+        }
+    }
+    return cps >= 1 && cps <= 40;
+}
+
 static void migrateAddUsernameColumn(SqliteDynamic &api, sqlite3 *db)
 {
     char *err = nullptr;
@@ -450,6 +475,33 @@ bool AppDatabase::initialize(std::string &errMsg)
                          "  FOREIGN KEY(to_user_id) REFERENCES users(user_id)"
                          ");"
                          "CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(from_user_id, to_user_id, id);"
+                         "CREATE TABLE IF NOT EXISTS chat_groups ("
+                         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                         "  name TEXT NOT NULL,"
+                         "  owner_user_id INTEGER NOT NULL,"
+                         "  created_at INTEGER NOT NULL,"
+                         "  FOREIGN KEY(owner_user_id) REFERENCES users(user_id)"
+                         ");"
+                         "CREATE TABLE IF NOT EXISTS group_members ("
+                         "  group_id INTEGER NOT NULL,"
+                         "  user_id INTEGER NOT NULL,"
+                         "  role TEXT NOT NULL,"
+                         "  joined_at INTEGER NOT NULL,"
+                         "  PRIMARY KEY (group_id, user_id),"
+                         "  FOREIGN KEY(group_id) REFERENCES chat_groups(id) ON DELETE CASCADE,"
+                         "  FOREIGN KEY(user_id) REFERENCES users(user_id)"
+                         ");"
+                         "CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id, joined_at);"
+                         "CREATE TABLE IF NOT EXISTS group_messages ("
+                         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                         "  group_id INTEGER NOT NULL,"
+                         "  from_user_id INTEGER NOT NULL,"
+                         "  content TEXT NOT NULL,"
+                         "  created_at INTEGER NOT NULL,"
+                         "  FOREIGN KEY(group_id) REFERENCES chat_groups(id) ON DELETE CASCADE,"
+                         "  FOREIGN KEY(from_user_id) REFERENCES users(user_id)"
+                         ");"
+                         "CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, id);"
                          "CREATE TABLE IF NOT EXISTS file_transfers ("
                          "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
                          "  from_user_id INTEGER NOT NULL,"
@@ -899,6 +951,45 @@ bool hasPendingRequest(SqliteDynamic &api, sqlite3 *db, std::int64_t fromUid, st
     const int sr = api.step(st);
     api.finalize(st);
     return sr == 100;
+}
+
+bool groupExists(SqliteDynamic &api, sqlite3 *db, std::int64_t groupId)
+{
+    const char *sql = "SELECT 1 FROM chat_groups WHERE id = ? LIMIT 1;";
+    sqlite3_stmt *st = nullptr;
+    if (api.prepare(db, sql, -1, &st, nullptr) != 0) {
+        return false;
+    }
+    const std::string gid = std::to_string(groupId);
+    api.bind_text_transient(st, 1, gid.c_str(), static_cast<int>(gid.size()));
+    const int sr = api.step(st);
+    api.finalize(st);
+    return sr == 100;
+}
+
+bool groupLookupMembership(SqliteDynamic &api, sqlite3 *db, std::int64_t groupId, std::int64_t userId,
+                           std::string *outRole = nullptr)
+{
+    const char *sql = "SELECT role FROM group_members WHERE group_id = ? AND user_id = ? LIMIT 1;";
+    sqlite3_stmt *st = nullptr;
+    if (api.prepare(db, sql, -1, &st, nullptr) != 0) {
+        return false;
+    }
+    const std::string gid = std::to_string(groupId);
+    const std::string uid = std::to_string(userId);
+    api.bind_text_transient(st, 1, gid.c_str(), static_cast<int>(gid.size()));
+    api.bind_text_transient(st, 2, uid.c_str(), static_cast<int>(uid.size()));
+    const int sr = api.step(st);
+    if (sr != 100) {
+        api.finalize(st);
+        return false;
+    }
+    if (outRole != nullptr) {
+        const unsigned char *rp = api.column_text(st, 0);
+        *outRole = rp ? reinterpret_cast<const char *>(rp) : "";
+    }
+    api.finalize(st);
+    return true;
 }
 
 } // namespace (friend helpers)
@@ -1889,6 +1980,527 @@ AppDatabase::MsgOpOutcome AppDatabase::messageClearConversation(const std::int64
     MsgOpOutcome o;
     o.ok = true;
     o.clearedRows = n;
+    return o;
+}
+
+AppDatabase::GroupOpOutcome AppDatabase::groupCreate(const std::int64_t ownerUserId, const std::string &nameUtf8,
+                                                     const std::vector<std::int64_t> &memberUserIds)
+{
+    GroupOpOutcome o;
+    const std::string groupName = trimAscii(nameUtf8);
+    if (!isValidGroupNameUtf8(groupName)) {
+        o.errCode = kErrGroupBadName;
+        o.message = "群名称格式不正确";
+        return o;
+    }
+
+    std::vector<std::int64_t> uniqueMembers;
+    uniqueMembers.reserve(memberUserIds.size());
+    for (const std::int64_t uid : memberUserIds) {
+        if (uid > 0 && uid != ownerUserId) {
+            uniqueMembers.push_back(uid);
+        }
+    }
+    std::sort(uniqueMembers.begin(), uniqueMembers.end());
+    uniqueMembers.erase(std::unique(uniqueMembers.begin(), uniqueMembers.end()), uniqueMembers.end());
+    if (uniqueMembers.empty()) {
+        o.errCode = kErrGroupBadMembers;
+        o.message = "请至少选择一位好友";
+        return o;
+    }
+
+    std::lock_guard<std::mutex> lock(g_dbMutex);
+    if (!g_ready || g_db == nullptr) {
+        o.errCode = kErrDbUnavailable;
+        o.message = "数据库不可用";
+        return o;
+    }
+    auto &api = sqliteApi();
+    if (!userExists(api, g_db, ownerUserId)) {
+        o.errCode = kErrUserNotFound;
+        o.message = "用户不存在";
+        return o;
+    }
+    for (const std::int64_t uid : uniqueMembers) {
+        if (!userExists(api, g_db, uid) || !areFriends(api, g_db, ownerUserId, uid)) {
+            o.errCode = kErrGroupBadMembers;
+            o.message = "只能邀请已添加的好友入群";
+            return o;
+        }
+    }
+
+    const std::int64_t nowSec = static_cast<std::int64_t>(std::time(nullptr));
+    const std::string nowStr = std::to_string(static_cast<long long>(nowSec));
+    const std::string ownerStr = std::to_string(ownerUserId);
+
+    const char *insGroup = "INSERT INTO chat_groups (name, owner_user_id, created_at) VALUES (?,?,?);";
+    sqlite3_stmt *st = nullptr;
+    if (api.prepare(g_db, insGroup, -1, &st, nullptr) != 0) {
+        o.errCode = kErrDbUnavailable;
+        o.message = api.errmsg(g_db);
+        return o;
+    }
+    api.bind_text_transient(st, 1, groupName.c_str(), static_cast<int>(groupName.size()));
+    api.bind_text_transient(st, 2, ownerStr.c_str(), static_cast<int>(ownerStr.size()));
+    api.bind_text_transient(st, 3, nowStr.c_str(), static_cast<int>(nowStr.size()));
+    if (api.step(st) != 101) {
+        api.finalize(st);
+        o.errCode = kErrDbUnavailable;
+        o.message = api.errmsg(g_db);
+        return o;
+    }
+    api.finalize(st);
+    const std::int64_t groupId = api.last_insert_rowid(g_db);
+    const std::string gidStr = std::to_string(groupId);
+
+    const char *insMember =
+        "INSERT INTO group_members (group_id, user_id, role, joined_at) VALUES (?,?,?,?);";
+    const char *roleOwner = "owner";
+    const char *roleMember = "member";
+    const auto insertMember = [&](std::int64_t uid, const char *roleAscii) -> bool {
+        sqlite3_stmt *mst = nullptr;
+        if (api.prepare(g_db, insMember, -1, &mst, nullptr) != 0) {
+            o.errCode = kErrDbUnavailable;
+            o.message = api.errmsg(g_db);
+            return false;
+        }
+        const std::string uidStr = std::to_string(uid);
+        api.bind_text_transient(mst, 1, gidStr.c_str(), static_cast<int>(gidStr.size()));
+        api.bind_text_transient(mst, 2, uidStr.c_str(), static_cast<int>(uidStr.size()));
+        api.bind_text_transient(mst, 3, roleAscii, static_cast<int>(std::strlen(roleAscii)));
+        api.bind_text_transient(mst, 4, nowStr.c_str(), static_cast<int>(nowStr.size()));
+        const bool okStep = (api.step(mst) == 101);
+        if (!okStep) {
+            o.errCode = kErrDbUnavailable;
+            o.message = api.errmsg(g_db);
+        }
+        api.finalize(mst);
+        return okStep;
+    };
+
+    if (!insertMember(ownerUserId, roleOwner)) {
+        return o;
+    }
+    for (const std::int64_t uid : uniqueMembers) {
+        if (!insertMember(uid, roleMember)) {
+            return o;
+        }
+    }
+
+    o.ok = true;
+    o.groupId = groupId;
+    return o;
+}
+
+AppDatabase::GroupOpOutcome AppDatabase::groupList(const std::int64_t selfUserId,
+                                                   std::vector<AppDatabase::GroupListRow> &out)
+{
+    out.clear();
+    GroupOpOutcome o;
+    std::lock_guard<std::mutex> lock(g_dbMutex);
+    if (!g_ready || g_db == nullptr) {
+        o.errCode = kErrDbUnavailable;
+        o.message = "数据库不可用";
+        return o;
+    }
+    auto &api = sqliteApi();
+    const char *sql =
+        "SELECT t.group_id, t.name, t.owner_user_id, t.joined_at, t.member_count, "
+        "t.last_content, t.last_at, t.last_from, t.last_from_nickname "
+        "FROM ("
+        "  SELECT g.id AS group_id, g.name, g.owner_user_id, gm.joined_at,"
+        "    (SELECT COUNT(1) FROM group_members gm2 WHERE gm2.group_id = g.id) AS member_count,"
+        "    (SELECT m.content FROM group_messages m WHERE m.group_id = g.id ORDER BY m.id DESC LIMIT 1) AS last_content,"
+        "    (SELECT m.created_at FROM group_messages m WHERE m.group_id = g.id ORDER BY m.id DESC LIMIT 1) AS last_at,"
+        "    (SELECT m.from_user_id FROM group_messages m WHERE m.group_id = g.id ORDER BY m.id DESC LIMIT 1) AS last_from,"
+        "    (SELECT IFNULL(u.nickname,'') FROM group_messages m JOIN users u ON u.user_id = m.from_user_id "
+        "        WHERE m.group_id = g.id ORDER BY m.id DESC LIMIT 1) AS last_from_nickname "
+        "  FROM group_members gm "
+        "  JOIN chat_groups g ON g.id = gm.group_id "
+        "  WHERE gm.user_id = ?"
+        ") AS t "
+        "ORDER BY IFNULL(t.last_at, 0) DESC, t.name COLLATE NOCASE ASC;";
+    sqlite3_stmt *st = nullptr;
+    if (api.prepare(g_db, sql, -1, &st, nullptr) != 0) {
+        o.errCode = kErrDbUnavailable;
+        o.message = api.errmsg(g_db);
+        return o;
+    }
+    const std::string selfStr = std::to_string(selfUserId);
+    api.bind_text_transient(st, 1, selfStr.c_str(), static_cast<int>(selfStr.size()));
+    for (;;) {
+        const int sr = api.step(st);
+        if (sr != 100) {
+            break;
+        }
+        GroupListRow row;
+        row.groupId = api.column_int64(st, 0);
+        const unsigned char *np = api.column_text(st, 1);
+        row.name = np ? reinterpret_cast<const char *>(np) : "";
+        row.ownerUserId = api.column_int64(st, 2);
+        row.joinedAt = api.column_int64(st, 3);
+        row.memberCount = api.column_int64(st, 4);
+        const unsigned char *cp = api.column_text(st, 5);
+        row.lastMessageContent = cp ? reinterpret_cast<const char *>(cp) : "";
+        if (row.lastMessageContent.size() > kMsgMaxContentUtf8Bytes) {
+            row.lastMessageContent.resize(kMsgMaxContentUtf8Bytes);
+        }
+        row.lastMessageAt = api.column_int64(st, 6);
+        row.lastMessageFromUserId = api.column_int64(st, 7);
+        const unsigned char *ln = api.column_text(st, 8);
+        row.lastMessageFromNickname = ln ? reinterpret_cast<const char *>(ln) : "";
+        out.push_back(std::move(row));
+    }
+    api.finalize(st);
+    o.ok = true;
+    return o;
+}
+
+AppDatabase::GroupOpOutcome AppDatabase::groupMembers(const std::int64_t selfUserId, const std::int64_t groupId,
+                                                      std::vector<AppDatabase::GroupMemberRow> &out)
+{
+    out.clear();
+    GroupOpOutcome o;
+    if (groupId <= 0) {
+        o.errCode = kErrGroupNotFound;
+        o.message = "群聊不存在";
+        return o;
+    }
+    std::lock_guard<std::mutex> lock(g_dbMutex);
+    if (!g_ready || g_db == nullptr) {
+        o.errCode = kErrDbUnavailable;
+        o.message = "数据库不可用";
+        return o;
+    }
+    auto &api = sqliteApi();
+    if (!groupExists(api, g_db, groupId)) {
+        o.errCode = kErrGroupNotFound;
+        o.message = "群聊不存在";
+        return o;
+    }
+    if (!groupLookupMembership(api, g_db, groupId, selfUserId)) {
+        o.errCode = kErrGroupNotMember;
+        o.message = "你还不是该群成员";
+        return o;
+    }
+    const char *sql =
+        "SELECT gm.user_id, u.email, IFNULL(u.nickname,''), gm.role, gm.joined_at "
+        "FROM group_members gm JOIN users u ON u.user_id = gm.user_id "
+        "WHERE gm.group_id = ? ORDER BY CASE gm.role WHEN 'owner' THEN 0 ELSE 1 END, gm.joined_at ASC, gm.user_id ASC;";
+    sqlite3_stmt *st = nullptr;
+    if (api.prepare(g_db, sql, -1, &st, nullptr) != 0) {
+        o.errCode = kErrDbUnavailable;
+        o.message = api.errmsg(g_db);
+        return o;
+    }
+    const std::string gidStr = std::to_string(groupId);
+    api.bind_text_transient(st, 1, gidStr.c_str(), static_cast<int>(gidStr.size()));
+    for (;;) {
+        const int sr = api.step(st);
+        if (sr != 100) {
+            break;
+        }
+        GroupMemberRow row;
+        row.userId = api.column_int64(st, 0);
+        const unsigned char *ep = api.column_text(st, 1);
+        const unsigned char *np = api.column_text(st, 2);
+        const unsigned char *rp = api.column_text(st, 3);
+        row.email = ep ? reinterpret_cast<const char *>(ep) : "";
+        row.nickname = np ? reinterpret_cast<const char *>(np) : "";
+        row.role = rp ? reinterpret_cast<const char *>(rp) : "";
+        row.joinedAt = api.column_int64(st, 4);
+        out.push_back(std::move(row));
+    }
+    api.finalize(st);
+    o.ok = true;
+    o.groupId = groupId;
+    return o;
+}
+
+AppDatabase::GroupOpOutcome AppDatabase::groupMessageSend(const std::int64_t fromUserId, const std::int64_t groupId,
+                                                          const std::string &contentUtf8)
+{
+    GroupOpOutcome o;
+    if (groupId <= 0) {
+        o.errCode = kErrGroupNotFound;
+        o.message = "群聊不存在";
+        return o;
+    }
+    if (contentUtf8.empty()) {
+        o.errCode = kErrMsgTooLong;
+        o.message = "消息内容不能为空";
+        return o;
+    }
+    if (contentUtf8.size() > kMsgMaxContentUtf8Bytes) {
+        o.errCode = kErrMsgTooLong;
+        o.message = "消息过长";
+        return o;
+    }
+
+    std::lock_guard<std::mutex> lock(g_dbMutex);
+    if (!g_ready || g_db == nullptr) {
+        o.errCode = kErrDbUnavailable;
+        o.message = "数据库不可用";
+        return o;
+    }
+    auto &api = sqliteApi();
+    if (!groupExists(api, g_db, groupId)) {
+        o.errCode = kErrGroupNotFound;
+        o.message = "群聊不存在";
+        return o;
+    }
+    if (!groupLookupMembership(api, g_db, groupId, fromUserId)) {
+        o.errCode = kErrGroupNotMember;
+        o.message = "你还不是该群成员";
+        return o;
+    }
+
+    const std::int64_t nowSec = static_cast<std::int64_t>(std::time(nullptr));
+    const std::string gidStr = std::to_string(groupId);
+    const std::string fromStr = std::to_string(fromUserId);
+    const std::string nowStr = std::to_string(static_cast<long long>(nowSec));
+    const char *ins =
+        "INSERT INTO group_messages (group_id, from_user_id, content, created_at) VALUES (?,?,?,?);";
+    sqlite3_stmt *st = nullptr;
+    if (api.prepare(g_db, ins, -1, &st, nullptr) != 0) {
+        o.errCode = kErrDbUnavailable;
+        o.message = api.errmsg(g_db);
+        return o;
+    }
+    api.bind_text_transient(st, 1, gidStr.c_str(), static_cast<int>(gidStr.size()));
+    api.bind_text_transient(st, 2, fromStr.c_str(), static_cast<int>(fromStr.size()));
+    api.bind_text_transient(st, 3, contentUtf8.c_str(), static_cast<int>(contentUtf8.size()));
+    api.bind_text_transient(st, 4, nowStr.c_str(), static_cast<int>(nowStr.size()));
+    if (api.step(st) != 101) {
+        api.finalize(st);
+        o.errCode = kErrDbUnavailable;
+        o.message = api.errmsg(g_db);
+        return o;
+    }
+    api.finalize(st);
+    o.ok = true;
+    o.groupId = groupId;
+    o.messageId = api.last_insert_rowid(g_db);
+    o.createdAt = nowSec;
+    return o;
+}
+
+AppDatabase::GroupOpOutcome AppDatabase::groupMessageFetch(const std::int64_t selfUserId, const std::int64_t groupId,
+                                                           const std::int64_t afterId, int limit,
+                                                           std::vector<AppDatabase::GroupChatMessageRow> &out)
+{
+    out.clear();
+    GroupOpOutcome o;
+    if (groupId <= 0) {
+        o.errCode = kErrGroupNotFound;
+        o.message = "群聊不存在";
+        return o;
+    }
+    if (limit <= 0) {
+        limit = 50;
+    }
+    if (limit > 200) {
+        limit = 200;
+    }
+    std::lock_guard<std::mutex> lock(g_dbMutex);
+    if (!g_ready || g_db == nullptr) {
+        o.errCode = kErrDbUnavailable;
+        o.message = "数据库不可用";
+        return o;
+    }
+    auto &api = sqliteApi();
+    if (!groupExists(api, g_db, groupId)) {
+        o.errCode = kErrGroupNotFound;
+        o.message = "群聊不存在";
+        return o;
+    }
+    if (!groupLookupMembership(api, g_db, groupId, selfUserId)) {
+        o.errCode = kErrGroupNotMember;
+        o.message = "你还不是该群成员";
+        return o;
+    }
+
+    const std::string gidStr = std::to_string(groupId);
+    const std::string limStr = std::to_string(limit);
+    const char *sqlRecent =
+        "SELECT m.id, m.group_id, m.from_user_id, IFNULL(u.nickname,''), m.content, m.created_at "
+        "FROM group_messages m JOIN users u ON u.user_id = m.from_user_id "
+        "WHERE m.group_id = ? ORDER BY m.id DESC LIMIT ?;";
+    const char *sqlAfter =
+        "SELECT m.id, m.group_id, m.from_user_id, IFNULL(u.nickname,''), m.content, m.created_at "
+        "FROM group_messages m JOIN users u ON u.user_id = m.from_user_id "
+        "WHERE m.group_id = ? AND m.id > ? ORDER BY m.id ASC LIMIT ?;";
+    sqlite3_stmt *st = nullptr;
+    if (api.prepare(g_db, afterId <= 0 ? sqlRecent : sqlAfter, -1, &st, nullptr) != 0) {
+        o.errCode = kErrDbUnavailable;
+        o.message = api.errmsg(g_db);
+        return o;
+    }
+    api.bind_text_transient(st, 1, gidStr.c_str(), static_cast<int>(gidStr.size()));
+    if (afterId <= 0) {
+        api.bind_text_transient(st, 2, limStr.c_str(), static_cast<int>(limStr.size()));
+    } else {
+        const std::string afterStr = std::to_string(afterId);
+        api.bind_text_transient(st, 2, afterStr.c_str(), static_cast<int>(afterStr.size()));
+        api.bind_text_transient(st, 3, limStr.c_str(), static_cast<int>(limStr.size()));
+    }
+    for (;;) {
+        const int sr = api.step(st);
+        if (sr != 100) {
+            break;
+        }
+        GroupChatMessageRow row;
+        row.messageId = api.column_int64(st, 0);
+        row.groupId = api.column_int64(st, 1);
+        row.fromUserId = api.column_int64(st, 2);
+        const unsigned char *np = api.column_text(st, 3);
+        const unsigned char *cp = api.column_text(st, 4);
+        row.fromNickname = np ? reinterpret_cast<const char *>(np) : "";
+        row.content = cp ? reinterpret_cast<const char *>(cp) : "";
+        row.createdAt = api.column_int64(st, 5);
+        out.push_back(std::move(row));
+    }
+    api.finalize(st);
+    if (afterId <= 0) {
+        std::reverse(out.begin(), out.end());
+    }
+    o.ok = true;
+    o.groupId = groupId;
+    return o;
+}
+
+AppDatabase::GroupOpOutcome AppDatabase::groupLeave(const std::int64_t selfUserId, const std::int64_t groupId)
+{
+    GroupOpOutcome o;
+    if (groupId <= 0) {
+        o.errCode = kErrGroupNotFound;
+        o.message = "群聊不存在";
+        return o;
+    }
+    std::lock_guard<std::mutex> lock(g_dbMutex);
+    if (!g_ready || g_db == nullptr) {
+        o.errCode = kErrDbUnavailable;
+        o.message = "数据库不可用";
+        return o;
+    }
+    auto &api = sqliteApi();
+    std::string role;
+    if (!groupExists(api, g_db, groupId)) {
+        o.errCode = kErrGroupNotFound;
+        o.message = "群聊不存在";
+        return o;
+    }
+    if (!groupLookupMembership(api, g_db, groupId, selfUserId, &role)) {
+        o.errCode = kErrGroupNotMember;
+        o.message = "你还不是该群成员";
+        return o;
+    }
+    if (role == "owner") {
+        const char *cntSql = "SELECT COUNT(1) FROM group_members WHERE group_id = ?;";
+        sqlite3_stmt *cntSt = nullptr;
+        if (api.prepare(g_db, cntSql, -1, &cntSt, nullptr) != 0) {
+            o.errCode = kErrDbUnavailable;
+            o.message = api.errmsg(g_db);
+            return o;
+        }
+        const std::string gidStr = std::to_string(groupId);
+        api.bind_text_transient(cntSt, 1, gidStr.c_str(), static_cast<int>(gidStr.size()));
+        std::int64_t memberCount = 0;
+        if (api.step(cntSt) == 100) {
+            memberCount = api.column_int64(cntSt, 0);
+        }
+        api.finalize(cntSt);
+        if (memberCount > 1) {
+            o.errCode = kErrGroupOwnerLeave;
+            o.message = "群主请先解散或转交群聊";
+            return o;
+        }
+        const char *delGroup = "DELETE FROM chat_groups WHERE id = ?;";
+        sqlite3_stmt *st = nullptr;
+        if (api.prepare(g_db, delGroup, -1, &st, nullptr) != 0) {
+            o.errCode = kErrDbUnavailable;
+            o.message = api.errmsg(g_db);
+            return o;
+        }
+        api.bind_text_transient(st, 1, gidStr.c_str(), static_cast<int>(gidStr.size()));
+        if (api.step(st) != 101) {
+            api.finalize(st);
+            o.errCode = kErrDbUnavailable;
+            o.message = api.errmsg(g_db);
+            return o;
+        }
+        api.finalize(st);
+    } else {
+        const char *delMember = "DELETE FROM group_members WHERE group_id = ? AND user_id = ?;";
+        sqlite3_stmt *st = nullptr;
+        if (api.prepare(g_db, delMember, -1, &st, nullptr) != 0) {
+            o.errCode = kErrDbUnavailable;
+            o.message = api.errmsg(g_db);
+            return o;
+        }
+        const std::string gidStr = std::to_string(groupId);
+        const std::string uidStr = std::to_string(selfUserId);
+        api.bind_text_transient(st, 1, gidStr.c_str(), static_cast<int>(gidStr.size()));
+        api.bind_text_transient(st, 2, uidStr.c_str(), static_cast<int>(uidStr.size()));
+        if (api.step(st) != 101) {
+            api.finalize(st);
+            o.errCode = kErrDbUnavailable;
+            o.message = api.errmsg(g_db);
+            return o;
+        }
+        api.finalize(st);
+    }
+    o.ok = true;
+    o.groupId = groupId;
+    return o;
+}
+
+AppDatabase::GroupOpOutcome AppDatabase::groupMemberIds(const std::int64_t selfUserId, const std::int64_t groupId,
+                                                        std::vector<std::int64_t> &outMemberUserIds)
+{
+    outMemberUserIds.clear();
+    GroupOpOutcome o;
+    if (groupId <= 0) {
+        o.errCode = kErrGroupNotFound;
+        o.message = "群聊不存在";
+        return o;
+    }
+    std::lock_guard<std::mutex> lock(g_dbMutex);
+    if (!g_ready || g_db == nullptr) {
+        o.errCode = kErrDbUnavailable;
+        o.message = "数据库不可用";
+        return o;
+    }
+    auto &api = sqliteApi();
+    if (!groupExists(api, g_db, groupId)) {
+        o.errCode = kErrGroupNotFound;
+        o.message = "群聊不存在";
+        return o;
+    }
+    if (!groupLookupMembership(api, g_db, groupId, selfUserId)) {
+        o.errCode = kErrGroupNotMember;
+        o.message = "你还不是该群成员";
+        return o;
+    }
+    const char *sql = "SELECT user_id FROM group_members WHERE group_id = ? ORDER BY user_id ASC;";
+    sqlite3_stmt *st = nullptr;
+    if (api.prepare(g_db, sql, -1, &st, nullptr) != 0) {
+        o.errCode = kErrDbUnavailable;
+        o.message = api.errmsg(g_db);
+        return o;
+    }
+    const std::string gidStr = std::to_string(groupId);
+    api.bind_text_transient(st, 1, gidStr.c_str(), static_cast<int>(gidStr.size()));
+    for (;;) {
+        const int sr = api.step(st);
+        if (sr != 100) {
+            break;
+        }
+        outMemberUserIds.push_back(api.column_int64(st, 0));
+    }
+    api.finalize(st);
+    o.ok = true;
+    o.groupId = groupId;
     return o;
 }
 
