@@ -44,6 +44,8 @@ inline constexpr int kErrFriendNotFriend = 3008;
 /// 即时消息（阶段 5）
 inline constexpr int kErrMsgNotFriend = 4001;
 inline constexpr int kErrMsgTooLong = 4002;
+/// 消息不存在或当前用户无权操作（如 `msg_delete`）。
+inline constexpr int kErrMsgNotFound = 4003;
 
 /// 群聊（阶段 7，MVP）
 inline constexpr int kErrGroupNotFound = 6001;

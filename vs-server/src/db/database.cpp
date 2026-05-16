@@ -516,7 +516,27 @@ bool AppDatabase::initialize(std::string &errMsg)
                          "  FOREIGN KEY(to_user_id) REFERENCES users(user_id)"
                          ");"
                          "CREATE INDEX IF NOT EXISTS idx_file_transfers_from ON file_transfers(from_user_id, status);"
-                         "CREATE INDEX IF NOT EXISTS idx_file_transfers_to ON file_transfers(to_user_id, status);";
+                         "CREATE INDEX IF NOT EXISTS idx_file_transfers_to ON file_transfers(to_user_id, status);"
+                         "CREATE TABLE IF NOT EXISTS message_deletions ("
+                         "  user_id INTEGER NOT NULL,"
+                         "  message_id INTEGER NOT NULL,"
+                         "  deleted_at INTEGER NOT NULL,"
+                         "  PRIMARY KEY (user_id, message_id),"
+                         "  FOREIGN KEY(user_id) REFERENCES users(user_id),"
+                         "  FOREIGN KEY(message_id) REFERENCES messages(id)"
+                         ");"
+                         "CREATE INDEX IF NOT EXISTS idx_message_deletions_user ON message_deletions(user_id, message_id);"
+                         "CREATE TABLE IF NOT EXISTS group_message_deletions ("
+                         "  user_id INTEGER NOT NULL,"
+                         "  group_id INTEGER NOT NULL,"
+                         "  message_id INTEGER NOT NULL,"
+                         "  deleted_at INTEGER NOT NULL,"
+                         "  PRIMARY KEY (user_id, message_id),"
+                         "  FOREIGN KEY(user_id) REFERENCES users(user_id),"
+                         "  FOREIGN KEY(group_id) REFERENCES chat_groups(id),"
+                         "  FOREIGN KEY(message_id) REFERENCES group_messages(id)"
+                         ");"
+                         "CREATE INDEX IF NOT EXISTS idx_group_message_deletions_user ON group_message_deletions(user_id, group_id, message_id);";
 
     if (api.exec(g_db, schema, &err) != 0) {
         errMsg = err ? err : api.errmsg(g_db);
@@ -1340,16 +1360,19 @@ AppDatabase::FriendOpOutcome AppDatabase::friendList(const std::int64_t selfUser
         "  SELECT f.peer_user_id, u.email AS email, IFNULL(u.nickname,'') AS nn, IFNULL(u.avatar_rev,0) AS avrev, "
         "f.created_at,"
         "    (SELECT m.content FROM messages m"
-        "     WHERE (m.from_user_id = f.user_id AND m.to_user_id = f.peer_user_id)"
-        "        OR (m.from_user_id = f.peer_user_id AND m.to_user_id = f.user_id)"
+        "     WHERE ((m.from_user_id = f.user_id AND m.to_user_id = f.peer_user_id)"
+        "        OR (m.from_user_id = f.peer_user_id AND m.to_user_id = f.user_id))"
+        "       AND NOT EXISTS (SELECT 1 FROM message_deletions d WHERE d.user_id = f.user_id AND d.message_id = m.id)"
         "     ORDER BY m.id DESC LIMIT 1) AS last_content,"
         "    (SELECT m.created_at FROM messages m"
-        "     WHERE (m.from_user_id = f.user_id AND m.to_user_id = f.peer_user_id)"
-        "        OR (m.from_user_id = f.peer_user_id AND m.to_user_id = f.user_id)"
+        "     WHERE ((m.from_user_id = f.user_id AND m.to_user_id = f.peer_user_id)"
+        "        OR (m.from_user_id = f.peer_user_id AND m.to_user_id = f.user_id))"
+        "       AND NOT EXISTS (SELECT 1 FROM message_deletions d WHERE d.user_id = f.user_id AND d.message_id = m.id)"
         "     ORDER BY m.id DESC LIMIT 1) AS last_at,"
         "    (SELECT m.from_user_id FROM messages m"
-        "     WHERE (m.from_user_id = f.user_id AND m.to_user_id = f.peer_user_id)"
-        "        OR (m.from_user_id = f.peer_user_id AND m.to_user_id = f.user_id)"
+        "     WHERE ((m.from_user_id = f.user_id AND m.to_user_id = f.peer_user_id)"
+        "        OR (m.from_user_id = f.peer_user_id AND m.to_user_id = f.user_id))"
+        "       AND NOT EXISTS (SELECT 1 FROM message_deletions d WHERE d.user_id = f.user_id AND d.message_id = m.id)"
         "     ORDER BY m.id DESC LIMIT 1) AS last_from"
         "  FROM friends f"
         "  JOIN users u ON u.user_id = f.peer_user_id"
@@ -1849,8 +1872,8 @@ AppDatabase::MsgOpOutcome AppDatabase::messageInsertChatRecord(const std::int64_
 }
 
 AppDatabase::MsgOpOutcome AppDatabase::messageFetch(const std::int64_t selfUserId, const std::int64_t peerUserId,
-                                                    const std::int64_t afterId, int limit,
-                                                    std::vector<ChatMessageRow> &out)
+                                                    const std::int64_t afterId, const std::int64_t beforeExclusive,
+                                                    int limit, std::vector<ChatMessageRow> &out)
 {
     out.clear();
     std::lock_guard<std::mutex> lock(g_dbMutex);
@@ -1875,11 +1898,14 @@ AppDatabase::MsgOpOutcome AppDatabase::messageFetch(const std::int64_t selfUserI
     const std::string peers = std::to_string(peerUserId);
     const std::string limStr = std::to_string(limit);
 
-    if (afterId <= 0) {
+    if (beforeExclusive > 0) {
+        const std::string beforeStr = std::to_string(beforeExclusive);
         const char *sql =
-            "SELECT id, from_user_id, to_user_id, content, created_at FROM messages "
-            "WHERE ((from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?)) "
-            "ORDER BY id DESC LIMIT ?;";
+            "SELECT m.id, m.from_user_id, m.to_user_id, m.content, m.created_at FROM messages m "
+            "WHERE ((m.from_user_id = ? AND m.to_user_id = ?) OR (m.from_user_id = ? AND m.to_user_id = ?)) "
+            "AND m.id < ? "
+            "AND NOT EXISTS (SELECT 1 FROM message_deletions d WHERE d.user_id = ? AND d.message_id = m.id) "
+            "ORDER BY m.id DESC LIMIT ?;";
         sqlite3_stmt *st = nullptr;
         if (api.prepare(g_db, sql, -1, &st, nullptr) != 0) {
             return msgOpFail(kErrDbUnavailable, api.errmsg(g_db));
@@ -1888,7 +1914,9 @@ AppDatabase::MsgOpOutcome AppDatabase::messageFetch(const std::int64_t selfUserI
         api.bind_text_transient(st, 2, peers.c_str(), static_cast<int>(peers.size()));
         api.bind_text_transient(st, 3, peers.c_str(), static_cast<int>(peers.size()));
         api.bind_text_transient(st, 4, selfs.c_str(), static_cast<int>(selfs.size()));
-        api.bind_text_transient(st, 5, limStr.c_str(), static_cast<int>(limStr.size()));
+        api.bind_text_transient(st, 5, beforeStr.c_str(), static_cast<int>(beforeStr.size()));
+        api.bind_text_transient(st, 6, selfs.c_str(), static_cast<int>(selfs.size()));
+        api.bind_text_transient(st, 7, limStr.c_str(), static_cast<int>(limStr.size()));
         for (;;) {
             const int sr = api.step(st);
             if (sr != 100) {
@@ -1905,12 +1933,46 @@ AppDatabase::MsgOpOutcome AppDatabase::messageFetch(const std::int64_t selfUserI
         }
         api.finalize(st);
         std::reverse(out.begin(), out.end());
-    } else {
+    } else if (afterId <= 0) {
+        const char *sql =
+            "SELECT m.id, m.from_user_id, m.to_user_id, m.content, m.created_at FROM messages m "
+            "WHERE ((m.from_user_id = ? AND m.to_user_id = ?) OR (m.from_user_id = ? AND m.to_user_id = ?)) "
+            "AND NOT EXISTS (SELECT 1 FROM message_deletions d WHERE d.user_id = ? AND d.message_id = m.id) "
+            "ORDER BY m.id DESC LIMIT ?;";
+        sqlite3_stmt *st = nullptr;
+        if (api.prepare(g_db, sql, -1, &st, nullptr) != 0) {
+            return msgOpFail(kErrDbUnavailable, api.errmsg(g_db));
+        }
+        api.bind_text_transient(st, 1, selfs.c_str(), static_cast<int>(selfs.size()));
+        api.bind_text_transient(st, 2, peers.c_str(), static_cast<int>(peers.size()));
+        api.bind_text_transient(st, 3, peers.c_str(), static_cast<int>(peers.size()));
+        api.bind_text_transient(st, 4, selfs.c_str(), static_cast<int>(selfs.size()));
+        api.bind_text_transient(st, 5, selfs.c_str(), static_cast<int>(selfs.size()));
+        api.bind_text_transient(st, 6, limStr.c_str(), static_cast<int>(limStr.size()));
+        for (;;) {
+            const int sr = api.step(st);
+            if (sr != 100) {
+                break;
+            }
+            ChatMessageRow r;
+            r.messageId = api.column_int64(st, 0);
+            r.fromUserId = api.column_int64(st, 1);
+            r.toUserId = api.column_int64(st, 2);
+            const unsigned char *cp = api.column_text(st, 3);
+            r.content = cp ? reinterpret_cast<const char *>(cp) : "";
+            r.createdAt = api.column_int64(st, 4);
+            out.push_back(std::move(r));
+        }
+        api.finalize(st);
+        std::reverse(out.begin(), out.end());
+    } else if (afterId > 0) {
         const std::string afterStr = std::to_string(afterId);
         const char *sql =
-            "SELECT id, from_user_id, to_user_id, content, created_at FROM messages "
-            "WHERE ((from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?)) "
-            "AND id > ? ORDER BY id ASC LIMIT ?;";
+            "SELECT m.id, m.from_user_id, m.to_user_id, m.content, m.created_at FROM messages m "
+            "WHERE ((m.from_user_id = ? AND m.to_user_id = ?) OR (m.from_user_id = ? AND m.to_user_id = ?)) "
+            "AND m.id > ? "
+            "AND NOT EXISTS (SELECT 1 FROM message_deletions d WHERE d.user_id = ? AND d.message_id = m.id) "
+            "ORDER BY m.id ASC LIMIT ?;";
         sqlite3_stmt *st = nullptr;
         if (api.prepare(g_db, sql, -1, &st, nullptr) != 0) {
             return msgOpFail(kErrDbUnavailable, api.errmsg(g_db));
@@ -1920,7 +1982,8 @@ AppDatabase::MsgOpOutcome AppDatabase::messageFetch(const std::int64_t selfUserI
         api.bind_text_transient(st, 3, peers.c_str(), static_cast<int>(peers.size()));
         api.bind_text_transient(st, 4, selfs.c_str(), static_cast<int>(selfs.size()));
         api.bind_text_transient(st, 5, afterStr.c_str(), static_cast<int>(afterStr.size()));
-        api.bind_text_transient(st, 6, limStr.c_str(), static_cast<int>(limStr.size()));
+        api.bind_text_transient(st, 6, selfs.c_str(), static_cast<int>(selfs.size()));
+        api.bind_text_transient(st, 7, limStr.c_str(), static_cast<int>(limStr.size()));
         for (;;) {
             const int sr = api.step(st);
             if (sr != 100) {
@@ -1960,9 +2023,25 @@ AppDatabase::MsgOpOutcome AppDatabase::messageClearConversation(const std::int64
 
     const std::string selfs = std::to_string(selfUserId);
     const std::string peers = std::to_string(peerUserId);
+    const char *delDeps =
+        "DELETE FROM message_deletions WHERE message_id IN ("
+        "SELECT id FROM messages WHERE (from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?));";
+    sqlite3_stmt *st = nullptr;
+    if (api.prepare(g_db, delDeps, -1, &st, nullptr) != 0) {
+        return msgOpFail(kErrDbUnavailable, api.errmsg(g_db));
+    }
+    api.bind_text_transient(st, 1, selfs.c_str(), static_cast<int>(selfs.size()));
+    api.bind_text_transient(st, 2, peers.c_str(), static_cast<int>(peers.size()));
+    api.bind_text_transient(st, 3, peers.c_str(), static_cast<int>(peers.size()));
+    api.bind_text_transient(st, 4, selfs.c_str(), static_cast<int>(selfs.size()));
+    if (api.step(st) != 101) {
+        api.finalize(st);
+        return msgOpFail(kErrDbUnavailable, api.errmsg(g_db));
+    }
+    api.finalize(st);
+
     const char *del =
         "DELETE FROM messages WHERE (from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?);";
-    sqlite3_stmt *st = nullptr;
     if (api.prepare(g_db, del, -1, &st, nullptr) != 0) {
         return msgOpFail(kErrDbUnavailable, api.errmsg(g_db));
     }
@@ -1980,6 +2059,63 @@ AppDatabase::MsgOpOutcome AppDatabase::messageClearConversation(const std::int64
     MsgOpOutcome o;
     o.ok = true;
     o.clearedRows = n;
+    return o;
+}
+
+AppDatabase::MsgOpOutcome AppDatabase::messageHideForUser(const std::int64_t selfUserId, const std::int64_t messageId)
+{
+    std::lock_guard<std::mutex> lock(g_dbMutex);
+    if (!g_ready || g_db == nullptr) {
+        return msgOpFail(kErrDbUnavailable, "数据库不可用");
+    }
+    if (messageId <= 0) {
+        return msgOpFail(kErrInvalidInput, "缺少 message_id");
+    }
+    auto &api = sqliteApi();
+    const std::string midStr = std::to_string(messageId);
+    const char *sel = "SELECT from_user_id, to_user_id FROM messages WHERE id = ?;";
+    sqlite3_stmt *st = nullptr;
+    if (api.prepare(g_db, sel, -1, &st, nullptr) != 0) {
+        return msgOpFail(kErrDbUnavailable, api.errmsg(g_db));
+    }
+    api.bind_text_transient(st, 1, midStr.c_str(), static_cast<int>(midStr.size()));
+    const int sr = api.step(st);
+    if (sr != 100) {
+        api.finalize(st);
+        return msgOpFail(kErrMsgNotFound, "消息不存在");
+    }
+    const std::int64_t fromUserId = api.column_int64(st, 0);
+    const std::int64_t toUserId = api.column_int64(st, 1);
+    api.finalize(st);
+    if (fromUserId != selfUserId && toUserId != selfUserId) {
+        return msgOpFail(kErrMsgNotFound, "消息不存在或无权删除");
+    }
+    const std::int64_t peerUserId = (fromUserId == selfUserId) ? toUserId : fromUserId;
+    if (!areFriends(api, g_db, selfUserId, peerUserId)) {
+        return msgOpFail(kErrMsgNotFriend, "非好友关系");
+    }
+
+    const std::time_t now = std::time(nullptr);
+    const std::int64_t nowSec = static_cast<std::int64_t>(now);
+    const std::string selfStr = std::to_string(selfUserId);
+    const std::string nowStr = std::to_string(static_cast<long long>(nowSec));
+    const char *ins =
+        "INSERT OR IGNORE INTO message_deletions (user_id, message_id, deleted_at) VALUES (?,?,?);";
+    if (api.prepare(g_db, ins, -1, &st, nullptr) != 0) {
+        return msgOpFail(kErrDbUnavailable, api.errmsg(g_db));
+    }
+    api.bind_text_transient(st, 1, selfStr.c_str(), static_cast<int>(selfStr.size()));
+    api.bind_text_transient(st, 2, midStr.c_str(), static_cast<int>(midStr.size()));
+    api.bind_text_transient(st, 3, nowStr.c_str(), static_cast<int>(nowStr.size()));
+    if (api.step(st) != 101) {
+        api.finalize(st);
+        return msgOpFail(kErrDbUnavailable, api.errmsg(g_db));
+    }
+    api.finalize(st);
+
+    MsgOpOutcome o;
+    o.ok = true;
+    o.messageId = messageId;
     return o;
 }
 
@@ -2110,11 +2246,22 @@ AppDatabase::GroupOpOutcome AppDatabase::groupList(const std::int64_t selfUserId
         "FROM ("
         "  SELECT g.id AS group_id, g.name, g.owner_user_id, gm.joined_at,"
         "    (SELECT COUNT(1) FROM group_members gm2 WHERE gm2.group_id = g.id) AS member_count,"
-        "    (SELECT m.content FROM group_messages m WHERE m.group_id = g.id ORDER BY m.id DESC LIMIT 1) AS last_content,"
-        "    (SELECT m.created_at FROM group_messages m WHERE m.group_id = g.id ORDER BY m.id DESC LIMIT 1) AS last_at,"
-        "    (SELECT m.from_user_id FROM group_messages m WHERE m.group_id = g.id ORDER BY m.id DESC LIMIT 1) AS last_from,"
+        "    (SELECT m.content FROM group_messages m"
+        "      WHERE m.group_id = g.id"
+        "        AND NOT EXISTS (SELECT 1 FROM group_message_deletions d WHERE d.user_id = gm.user_id AND d.message_id = m.id)"
+        "      ORDER BY m.id DESC LIMIT 1) AS last_content,"
+        "    (SELECT m.created_at FROM group_messages m"
+        "      WHERE m.group_id = g.id"
+        "        AND NOT EXISTS (SELECT 1 FROM group_message_deletions d WHERE d.user_id = gm.user_id AND d.message_id = m.id)"
+        "      ORDER BY m.id DESC LIMIT 1) AS last_at,"
+        "    (SELECT m.from_user_id FROM group_messages m"
+        "      WHERE m.group_id = g.id"
+        "        AND NOT EXISTS (SELECT 1 FROM group_message_deletions d WHERE d.user_id = gm.user_id AND d.message_id = m.id)"
+        "      ORDER BY m.id DESC LIMIT 1) AS last_from,"
         "    (SELECT IFNULL(u.nickname,'') FROM group_messages m JOIN users u ON u.user_id = m.from_user_id "
-        "        WHERE m.group_id = g.id ORDER BY m.id DESC LIMIT 1) AS last_from_nickname "
+        "      WHERE m.group_id = g.id"
+        "        AND NOT EXISTS (SELECT 1 FROM group_message_deletions d WHERE d.user_id = gm.user_id AND d.message_id = m.id)"
+        "      ORDER BY m.id DESC LIMIT 1) AS last_from_nickname "
         "  FROM group_members gm "
         "  JOIN chat_groups g ON g.id = gm.group_id "
         "  WHERE gm.user_id = ?"
@@ -2286,8 +2433,8 @@ AppDatabase::GroupOpOutcome AppDatabase::groupMessageSend(const std::int64_t fro
 }
 
 AppDatabase::GroupOpOutcome AppDatabase::groupMessageFetch(const std::int64_t selfUserId, const std::int64_t groupId,
-                                                           const std::int64_t afterId, int limit,
-                                                           std::vector<AppDatabase::GroupChatMessageRow> &out)
+                                                           const std::int64_t afterId, const std::int64_t beforeExclusive,
+                                                           int limit, std::vector<AppDatabase::GroupChatMessageRow> &out)
 {
     out.clear();
     GroupOpOutcome o;
@@ -2322,27 +2469,51 @@ AppDatabase::GroupOpOutcome AppDatabase::groupMessageFetch(const std::int64_t se
 
     const std::string gidStr = std::to_string(groupId);
     const std::string limStr = std::to_string(limit);
+    const std::string selfStr = std::to_string(selfUserId);
     const char *sqlRecent =
         "SELECT m.id, m.group_id, m.from_user_id, IFNULL(u.nickname,''), m.content, m.created_at "
         "FROM group_messages m JOIN users u ON u.user_id = m.from_user_id "
-        "WHERE m.group_id = ? ORDER BY m.id DESC LIMIT ?;";
+        "WHERE m.group_id = ? "
+        "AND NOT EXISTS (SELECT 1 FROM group_message_deletions d WHERE d.user_id = ? AND d.message_id = m.id) "
+        "ORDER BY m.id DESC LIMIT ?;";
+    const char *sqlBefore =
+        "SELECT m.id, m.group_id, m.from_user_id, IFNULL(u.nickname,''), m.content, m.created_at "
+        "FROM group_messages m JOIN users u ON u.user_id = m.from_user_id "
+        "WHERE m.group_id = ? AND m.id < ? "
+        "AND NOT EXISTS (SELECT 1 FROM group_message_deletions d WHERE d.user_id = ? AND d.message_id = m.id) "
+        "ORDER BY m.id DESC LIMIT ?;";
     const char *sqlAfter =
         "SELECT m.id, m.group_id, m.from_user_id, IFNULL(u.nickname,''), m.content, m.created_at "
         "FROM group_messages m JOIN users u ON u.user_id = m.from_user_id "
-        "WHERE m.group_id = ? AND m.id > ? ORDER BY m.id ASC LIMIT ?;";
+        "WHERE m.group_id = ? AND m.id > ? "
+        "AND NOT EXISTS (SELECT 1 FROM group_message_deletions d WHERE d.user_id = ? AND d.message_id = m.id) "
+        "ORDER BY m.id ASC LIMIT ?;";
     sqlite3_stmt *st = nullptr;
-    if (api.prepare(g_db, afterId <= 0 ? sqlRecent : sqlAfter, -1, &st, nullptr) != 0) {
+    const char *chosenSql = sqlRecent;
+    if (beforeExclusive > 0) {
+        chosenSql = sqlBefore;
+    } else if (afterId > 0) {
+        chosenSql = sqlAfter;
+    }
+    if (api.prepare(g_db, chosenSql, -1, &st, nullptr) != 0) {
         o.errCode = kErrDbUnavailable;
         o.message = api.errmsg(g_db);
         return o;
     }
     api.bind_text_transient(st, 1, gidStr.c_str(), static_cast<int>(gidStr.size()));
-    if (afterId <= 0) {
-        api.bind_text_transient(st, 2, limStr.c_str(), static_cast<int>(limStr.size()));
+    if (beforeExclusive > 0) {
+        const std::string beforeStr = std::to_string(beforeExclusive);
+        api.bind_text_transient(st, 2, beforeStr.c_str(), static_cast<int>(beforeStr.size()));
+        api.bind_text_transient(st, 3, selfStr.c_str(), static_cast<int>(selfStr.size()));
+        api.bind_text_transient(st, 4, limStr.c_str(), static_cast<int>(limStr.size()));
+    } else if (afterId <= 0) {
+        api.bind_text_transient(st, 2, selfStr.c_str(), static_cast<int>(selfStr.size()));
+        api.bind_text_transient(st, 3, limStr.c_str(), static_cast<int>(limStr.size()));
     } else {
         const std::string afterStr = std::to_string(afterId);
         api.bind_text_transient(st, 2, afterStr.c_str(), static_cast<int>(afterStr.size()));
-        api.bind_text_transient(st, 3, limStr.c_str(), static_cast<int>(limStr.size()));
+        api.bind_text_transient(st, 3, selfStr.c_str(), static_cast<int>(selfStr.size()));
+        api.bind_text_transient(st, 4, limStr.c_str(), static_cast<int>(limStr.size()));
     }
     for (;;) {
         const int sr = api.step(st);
@@ -2361,11 +2532,92 @@ AppDatabase::GroupOpOutcome AppDatabase::groupMessageFetch(const std::int64_t se
         out.push_back(std::move(row));
     }
     api.finalize(st);
-    if (afterId <= 0) {
+    if (beforeExclusive > 0 || afterId <= 0) {
         std::reverse(out.begin(), out.end());
     }
     o.ok = true;
     o.groupId = groupId;
+    return o;
+}
+
+AppDatabase::GroupOpOutcome AppDatabase::groupMessageHideForUser(const std::int64_t selfUserId, const std::int64_t groupId,
+                                                                const std::int64_t messageId)
+{
+    GroupOpOutcome o;
+    if (groupId <= 0 || messageId <= 0) {
+        o.errCode = kErrInvalidInput;
+        o.message = "缺少 group_id 或 message_id";
+        return o;
+    }
+    std::lock_guard<std::mutex> lock(g_dbMutex);
+    if (!g_ready || g_db == nullptr) {
+        o.errCode = kErrDbUnavailable;
+        o.message = "数据库不可用";
+        return o;
+    }
+    auto &api = sqliteApi();
+    if (!groupExists(api, g_db, groupId)) {
+        o.errCode = kErrGroupNotFound;
+        o.message = "群聊不存在";
+        return o;
+    }
+    if (!groupLookupMembership(api, g_db, groupId, selfUserId)) {
+        o.errCode = kErrGroupNotMember;
+        o.message = "你还不是该群成员";
+        return o;
+    }
+
+    const std::string midStr = std::to_string(messageId);
+    const char *sel = "SELECT group_id FROM group_messages WHERE id = ?;";
+    sqlite3_stmt *st = nullptr;
+    if (api.prepare(g_db, sel, -1, &st, nullptr) != 0) {
+        o.errCode = kErrDbUnavailable;
+        o.message = api.errmsg(g_db);
+        return o;
+    }
+    api.bind_text_transient(st, 1, midStr.c_str(), static_cast<int>(midStr.size()));
+    const int sr = api.step(st);
+    if (sr != 100) {
+        api.finalize(st);
+        o.errCode = kErrMsgNotFound;
+        o.message = "消息不存在";
+        return o;
+    }
+    const std::int64_t msgGroupId = api.column_int64(st, 0);
+    api.finalize(st);
+    if (msgGroupId != groupId) {
+        o.errCode = kErrMsgNotFound;
+        o.message = "消息不存在";
+        return o;
+    }
+
+    const std::time_t now = std::time(nullptr);
+    const std::int64_t nowSec = static_cast<std::int64_t>(now);
+    const std::string selfStr = std::to_string(selfUserId);
+    const std::string gidStr = std::to_string(groupId);
+    const std::string nowStr = std::to_string(static_cast<long long>(nowSec));
+    const char *ins =
+        "INSERT OR IGNORE INTO group_message_deletions (user_id, group_id, message_id, deleted_at) VALUES (?,?,?,?);";
+    if (api.prepare(g_db, ins, -1, &st, nullptr) != 0) {
+        o.errCode = kErrDbUnavailable;
+        o.message = api.errmsg(g_db);
+        return o;
+    }
+    api.bind_text_transient(st, 1, selfStr.c_str(), static_cast<int>(selfStr.size()));
+    api.bind_text_transient(st, 2, gidStr.c_str(), static_cast<int>(gidStr.size()));
+    api.bind_text_transient(st, 3, midStr.c_str(), static_cast<int>(midStr.size()));
+    api.bind_text_transient(st, 4, nowStr.c_str(), static_cast<int>(nowStr.size()));
+    if (api.step(st) != 101) {
+        api.finalize(st);
+        o.errCode = kErrDbUnavailable;
+        o.message = api.errmsg(g_db);
+        return o;
+    }
+    api.finalize(st);
+    o.ok = true;
+    o.groupId = groupId;
+    o.messageId = messageId;
+    o.createdAt = nowSec;
     return o;
 }
 

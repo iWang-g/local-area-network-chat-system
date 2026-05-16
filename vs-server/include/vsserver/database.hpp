@@ -163,12 +163,16 @@ public:
     static MsgOpOutcome messageInsertChatRecord(std::int64_t fromUserId, std::int64_t toUserId,
                                                 const std::string &contentUtf8);
 
-    /// `after_id==0`：取最近 `limit` 条（按时间正序返回）；`after_id>0`：取 id 更大者（增量拉取）。
+    /// `before_exclusive>0`：取 `id < before_exclusive` 的最近 `limit` 条（按 id 正序返回，用于向上翻更早）。
+    /// 否则：`after_id==0` 取最近 `limit` 条（正序）；`after_id>0` 取 id 更大者（增量拉取）。
     static MsgOpOutcome messageFetch(std::int64_t selfUserId, std::int64_t peerUserId, std::int64_t afterId,
-                                     int limit, std::vector<ChatMessageRow> &out);
+                                     std::int64_t beforeExclusive, int limit, std::vector<ChatMessageRow> &out);
 
     /// 删除双方在该会话中的全部 `messages` 行（双向）；须为好友。
     static MsgOpOutcome messageClearConversation(std::int64_t selfUserId, std::int64_t peerUserId);
+
+    /// 对当前用户单向隐藏一条私聊消息（写入 `message_deletions`，不删 `messages` 行）。
+    static MsgOpOutcome messageHideForUser(std::int64_t selfUserId, std::int64_t messageId);
 
     /// --- 群聊（阶段 7，MVP）---
 
@@ -216,8 +220,12 @@ public:
     static GroupOpOutcome groupMembers(std::int64_t selfUserId, std::int64_t groupId,
                                        std::vector<GroupMemberRow> &out);
     static GroupOpOutcome groupMessageSend(std::int64_t fromUserId, std::int64_t groupId, const std::string &contentUtf8);
-    static GroupOpOutcome groupMessageFetch(std::int64_t selfUserId, std::int64_t groupId, std::int64_t afterId, int limit,
+    static GroupOpOutcome groupMessageFetch(std::int64_t selfUserId, std::int64_t groupId, std::int64_t afterId,
+                                            std::int64_t beforeExclusive, int limit,
                                             std::vector<GroupChatMessageRow> &out);
+    /// 对当前用户单向隐藏一条群消息（写入 `group_message_deletions`）。
+    static GroupOpOutcome groupMessageHideForUser(std::int64_t selfUserId, std::int64_t groupId,
+                                                  std::int64_t messageId);
     static GroupOpOutcome groupLeave(std::int64_t selfUserId, std::int64_t groupId);
     static GroupOpOutcome groupMemberIds(std::int64_t selfUserId, std::int64_t groupId,
                                          std::vector<std::int64_t> &outMemberUserIds);

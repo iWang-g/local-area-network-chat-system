@@ -823,10 +823,11 @@ void handleClient(SockHandle client, std::atomic<std::uint64_t> &connId)
                     continue;
                 }
                 const std::int64_t afterId = parseJsonInt64Field(json, "after_id").value_or(0);
+                const std::int64_t beforeId = parseJsonInt64Field(json, "before_id").value_or(0);
                 int limit = static_cast<int>(parseJsonInt64Field(json, "limit").value_or(50));
                 std::vector<AppDatabase::ChatMessageRow> rows;
                 const AppDatabase::MsgOpOutcome mo =
-                    AppDatabase::messageFetch(selfUid, *peerOpt, afterId, limit, rows);
+                    AppDatabase::messageFetch(selfUid, *peerOpt, afterId, beforeId, limit, rows);
                 if (!mo.ok) {
                     if (!sendAll(client, encodeFrame(buildErrorJson(mo.errCode, mo.message)))) {
                         goto end;
@@ -845,6 +846,33 @@ void handleClient(SockHandle client, std::atomic<std::uint64_t> &connId)
                     ents.push_back(std::move(e));
                 }
                 if (!sendAll(client, encodeFrame(buildMsgFetchOkJson(*peerOpt, ents)))) {
+                    goto end;
+                }
+            } else if (*t == "msg_delete") {
+                std::int64_t selfUid = 0;
+                const AuthRc ar = requireFriendAuth(client, helloOk, json, selfUid);
+                if (ar == AuthRc::IoErr) {
+                    goto end;
+                }
+                if (ar == AuthRc::ContinueLoop) {
+                    continue;
+                }
+                const auto midOpt = parseJsonInt64Field(json, "message_id");
+                if (!midOpt || *midOpt <= 0) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrInvalidInput, "缺少 message_id")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                const AppDatabase::MsgOpOutcome mo = AppDatabase::messageHideForUser(selfUid, *midOpt);
+                if (!mo.ok) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(mo.errCode, mo.message)))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                VSLOG_INFO("[conn " + std::to_string(id) + "] msg_delete message_id=" + std::to_string(*midOpt));
+                if (!sendAll(client, encodeFrame(buildMsgDeleteOkJson(*midOpt)))) {
                     goto end;
                 }
             } else if (*t == "msg_clear") {
@@ -1044,10 +1072,11 @@ void handleClient(SockHandle client, std::atomic<std::uint64_t> &connId)
                     continue;
                 }
                 const std::int64_t afterId = parseJsonInt64Field(json, "after_id").value_or(0);
+                const std::int64_t beforeId = parseJsonInt64Field(json, "before_id").value_or(0);
                 int limit = static_cast<int>(parseJsonInt64Field(json, "limit").value_or(50));
                 std::vector<AppDatabase::GroupChatMessageRow> rows;
                 const AppDatabase::GroupOpOutcome go =
-                    AppDatabase::groupMessageFetch(selfUid, *groupOpt, afterId, limit, rows);
+                    AppDatabase::groupMessageFetch(selfUid, *groupOpt, afterId, beforeId, limit, rows);
                 if (!go.ok) {
                     if (!sendAll(client, encodeFrame(buildErrorJson(go.errCode, go.message)))) {
                         goto end;
@@ -1067,6 +1096,36 @@ void handleClient(SockHandle client, std::atomic<std::uint64_t> &connId)
                     ents.push_back(std::move(e));
                 }
                 if (!sendAll(client, encodeFrame(buildGroupMsgFetchOkJson(*groupOpt, ents)))) {
+                    goto end;
+                }
+            } else if (*t == "group_msg_delete") {
+                std::int64_t selfUid = 0;
+                const AuthRc ar = requireFriendAuth(client, helloOk, json, selfUid);
+                if (ar == AuthRc::IoErr) {
+                    goto end;
+                }
+                if (ar == AuthRc::ContinueLoop) {
+                    continue;
+                }
+                const auto groupOpt = parseJsonInt64Field(json, "group_id");
+                const auto midOpt = parseJsonInt64Field(json, "message_id");
+                if (!groupOpt || *groupOpt <= 0 || !midOpt || *midOpt <= 0) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(kErrInvalidInput, "缺少 group_id 或 message_id")))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                const AppDatabase::GroupOpOutcome go =
+                    AppDatabase::groupMessageHideForUser(selfUid, *groupOpt, *midOpt);
+                if (!go.ok) {
+                    if (!sendAll(client, encodeFrame(buildErrorJson(go.errCode, go.message)))) {
+                        goto end;
+                    }
+                    continue;
+                }
+                VSLOG_INFO("[conn " + std::to_string(id) + "] group_msg_delete group=" + std::to_string(*groupOpt)
+                           + " message_id=" + std::to_string(*midOpt));
+                if (!sendAll(client, encodeFrame(buildGroupMsgDeleteOkJson(*groupOpt, *midOpt)))) {
                     goto end;
                 }
             } else if (*t == "group_leave") {

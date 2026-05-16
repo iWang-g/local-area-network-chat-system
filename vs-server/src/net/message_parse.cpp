@@ -577,6 +577,11 @@ std::string buildMsgConvClearedJson(const std::int64_t byUserId)
     return std::string(R"({"type":"msg_conv_cleared","by_user_id":)") + std::to_string(byUserId) + '}';
 }
 
+std::string buildMsgDeleteOkJson(const std::int64_t messageId)
+{
+    return std::string(R"({"type":"msg_delete_ok","message_id":)") + std::to_string(messageId) + '}';
+}
+
 std::string buildGroupCreateOkJson(const std::int64_t groupId, const std::string &nameUtf8, const std::int64_t ownerUserId,
                                    const std::int64_t memberCount)
 {
@@ -661,6 +666,13 @@ std::string buildGroupMsgPushJson(const GroupChatMessageEntry &e)
     oss << R"({"type":"group_msg_push","message_id":)" << e.messageId << R"(,"group_id":)" << e.groupId
         << R"(,"from_user_id":)" << e.fromUserId << R"(,"from_nickname":")" << jsonEscapeString(e.fromNickname)
         << R"(","content":")" << jsonEscapeString(e.content) << R"(","created_at":)" << e.createdAt << '}';
+    return oss.str();
+}
+
+std::string buildGroupMsgDeleteOkJson(const std::int64_t groupId, const std::int64_t messageId)
+{
+    std::ostringstream oss;
+    oss << R"({"type":"group_msg_delete_ok","group_id":)" << groupId << R"(,"message_id":)" << messageId << '}';
     return oss.str();
 }
 

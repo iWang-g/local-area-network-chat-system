@@ -127,6 +127,7 @@ std::string buildMsgPushJson(const ChatMessageEntry &e);
 std::string buildMsgClearOkJson(std::int64_t peerUserId, std::int64_t deletedRows);
 /// 对端在线时下推：发起清空的一方 `by_user_id`。
 std::string buildMsgConvClearedJson(std::int64_t byUserId);
+std::string buildMsgDeleteOkJson(std::int64_t messageId);
 
 std::string buildGroupCreateOkJson(std::int64_t groupId, const std::string &nameUtf8, std::int64_t ownerUserId,
                                    std::int64_t memberCount);
@@ -135,6 +136,7 @@ std::string buildGroupMembersOkJson(std::int64_t groupId, const std::vector<Grou
 std::string buildGroupMsgSendOkJson(const GroupChatMessageEntry &e);
 std::string buildGroupMsgFetchOkJson(std::int64_t groupId, const std::vector<GroupChatMessageEntry> &messages);
 std::string buildGroupMsgPushJson(const GroupChatMessageEntry &e);
+std::string buildGroupMsgDeleteOkJson(std::int64_t groupId, std::int64_t messageId);
 std::string buildGroupLeaveOkJson(std::int64_t groupId);
 
 /// 阶段 6：文件分片（JSON + Base64）；若给定 `chunkPlainMaxBinary` 则附带二进制分片能力字段。
