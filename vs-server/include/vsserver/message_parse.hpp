@@ -118,6 +118,8 @@ std::string buildProfileSetOkJson(const std::string &nicknameUtf8, std::int64_t 
 std::string buildProfileSetAvatarOkJson(std::int64_t avatarRev, std::int64_t corr);
 std::string buildPeerAvatarOkJson(std::int64_t peerUserId, std::int64_t avatarRev, const std::string &avatarB64Utf8);
 std::string buildFriendNotifyAvatarJson(std::int64_t peerUserId, std::int64_t avatarRev);
+/// 被删除方：`peer_user_id` 为发起删除的一方。
+std::string buildFriendNotifyFriendRemovedJson(std::int64_t peerUserId);
 std::string buildFriendListOkJson(const std::vector<FriendListEntry> &friends);
 std::string buildFriendDeleteOkJson(std::int64_t peerUserId);
 

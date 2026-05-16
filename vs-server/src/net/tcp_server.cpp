@@ -59,6 +59,7 @@ bool sendAll(SockHandle s, const std::string &data)
 
 void notifyFriendsPresenceChanged(const std::int64_t subjectUserId, bool online);
 void notifyFriendsNicknameChanged(const std::int64_t subjectUserId, const std::string &nicknameUtf8);
+void notifyPeerFriendRemoved(const std::int64_t deleterUserId, const std::int64_t removedUserId);
 
 void onlineRegister(const std::int64_t userId, SockHandle sock)
 {
@@ -135,6 +136,14 @@ void notifyFriendsAvatarChanged(const std::int64_t subjectUserId, const std::int
     for (const std::int64_t pid : peers) {
         pushFrameToUser(pid, frame);
     }
+}
+
+void notifyPeerFriendRemoved(const std::int64_t deleterUserId, const std::int64_t removedUserId)
+{
+    if (deleterUserId <= 0 || removedUserId <= 0 || deleterUserId == removedUserId) {
+        return;
+    }
+    pushFrameToUser(removedUserId, encodeFrame(buildFriendNotifyFriendRemovedJson(deleterUserId)));
 }
 
 void pushFrameToUser(const std::int64_t userId, const std::string &frame)
@@ -635,6 +644,7 @@ void handleClient(SockHandle client, std::atomic<std::uint64_t> &connId)
                 if (!sendAll(client, encodeFrame(buildFriendDeleteOkJson(*peerOpt)))) {
                     goto end;
                 }
+                notifyPeerFriendRemoved(selfUid, *peerOpt);
             } else if (*t == "profile_set") {
                 std::int64_t selfUid = 0;
                 const AuthRc ar = requireFriendAuth(client, helloOk, json, selfUid);

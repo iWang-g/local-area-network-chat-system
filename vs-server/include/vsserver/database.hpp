@@ -136,6 +136,9 @@ public:
     /// 是否已为好友（供文件中继等模块使用）。
     static bool areUsersFriends(std::int64_t userId, std::int64_t peerUserId);
 
+    /// 双方是否有过私聊消息（含已删除好友后的历史）。
+    static bool hasDirectConversation(std::int64_t userA, std::int64_t userB);
+
     /// --- 即时消息（阶段 5）---
 
     struct ChatMessageRow {

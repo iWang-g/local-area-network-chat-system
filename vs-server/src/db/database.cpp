@@ -955,6 +955,29 @@ bool areFriends(SqliteDynamic &api, sqlite3 *db, std::int64_t a, std::int64_t b)
     return sr == 100;
 }
 
+bool hasDirectConversationBetween(SqliteDynamic &api, sqlite3 *db, const std::int64_t a, const std::int64_t b)
+{
+    if (a <= 0 || b <= 0 || a == b) {
+        return false;
+    }
+    const char *sql =
+        "SELECT 1 FROM messages WHERE (from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?) "
+        "LIMIT 1;";
+    sqlite3_stmt *st = nullptr;
+    if (api.prepare(db, sql, -1, &st, nullptr) != 0) {
+        return false;
+    }
+    const std::string sa = std::to_string(a);
+    const std::string sb = std::to_string(b);
+    api.bind_text_transient(st, 1, sa.c_str(), static_cast<int>(sa.size()));
+    api.bind_text_transient(st, 2, sb.c_str(), static_cast<int>(sb.size()));
+    api.bind_text_transient(st, 3, sb.c_str(), static_cast<int>(sb.size()));
+    api.bind_text_transient(st, 4, sa.c_str(), static_cast<int>(sa.size()));
+    const int sr = api.step(st);
+    api.finalize(st);
+    return sr == 100;
+}
+
 bool hasPendingRequest(SqliteDynamic &api, sqlite3 *db, std::int64_t fromUid, std::int64_t toUid)
 {
     const char *sql =
@@ -1453,6 +1476,18 @@ bool AppDatabase::areUsersFriends(const std::int64_t userId, const std::int64_t 
     return areFriends(sqliteApi(), g_db, userId, peerUserId);
 }
 
+bool AppDatabase::hasDirectConversation(const std::int64_t userA, const std::int64_t userB)
+{
+    if (userA <= 0 || userB <= 0 || userA == userB) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_dbMutex);
+    if (!g_ready || g_db == nullptr) {
+        return false;
+    }
+    return hasDirectConversationBetween(sqliteApi(), g_db, userA, userB);
+}
+
 AppDatabase::FriendOpOutcome AppDatabase::setNickname(const std::int64_t selfUserId, const std::string &nicknameUtf8)
 {
     const std::string n = trimAscii(nicknameUtf8);
@@ -1547,7 +1582,8 @@ AppDatabase::FriendOpOutcome AppDatabase::getFriendAvatarJpeg(const std::int64_t
         return foFail(kErrDbUnavailable, "数据库不可用");
     }
     auto &api = sqliteApi();
-    if (!areFriends(api, g_db, selfUserId, peerUserId)) {
+    if (!areFriends(api, g_db, selfUserId, peerUserId)
+        && !hasDirectConversationBetween(api, g_db, selfUserId, peerUserId)) {
         return foFail(kErrFriendNotFriend, "非好友关系");
     }
     const char *sql = "SELECT IFNULL(avatar_rev,0), avatar_jpeg FROM users WHERE user_id = ? LIMIT 1;";
@@ -1884,7 +1920,8 @@ AppDatabase::MsgOpOutcome AppDatabase::messageFetch(const std::int64_t selfUserI
         return msgOpFail(kErrInvalidInput, "无效的会话");
     }
     auto &api = sqliteApi();
-    if (!areFriends(api, g_db, selfUserId, peerUserId)) {
+    const bool friends = areFriends(api, g_db, selfUserId, peerUserId);
+    if (!friends && !hasDirectConversationBetween(api, g_db, selfUserId, peerUserId)) {
         return msgOpFail(kErrMsgNotFriend, "非好友关系");
     }
     if (limit <= 0) {

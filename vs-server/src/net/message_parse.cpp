@@ -502,6 +502,13 @@ std::string buildFriendNotifyAvatarJson(const std::int64_t peerUserId, const std
     return oss.str();
 }
 
+std::string buildFriendNotifyFriendRemovedJson(const std::int64_t peerUserId)
+{
+    std::ostringstream oss;
+    oss << R"({"type":"friend_notify","event":"friend_removed","peer_user_id":)" << peerUserId << '}';
+    return oss.str();
+}
+
 std::string buildFriendListOkJson(const std::vector<FriendListEntry> &friends)
 {
     std::ostringstream oss;
